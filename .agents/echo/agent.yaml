@@ -1,0 +1,51 @@
+# [echo] — fixture agent: returns the dispatched text, shaped by directive flags.
+command: "[echo]"
+model: haiku
+scope: agnostic
+timeout: 60
+default_operation: echo
+
+# Calling card presented by the agent catalog (VAL-18).
+capabilities:
+  purpose: Return the dispatched text, optionally reshaped by directive flags.
+  use_when: You need a trivial, deterministic passthrough — smoke tests and demos.
+  inputs: free-text in context.text
+  produces: the same text, echoed back
+  examples:
+    - '[echo] : hola mundo'
+    - '[echo] --backwards --terse : hola'
+
+# Agent-level personality flag: --personality=<value> swaps this section; the
+# default applies when the flag is absent.
+personality:
+  default: Answer plainly, with no added commentary.
+  values:
+    techlead: Frame the answer as a tech lead would — surface trade-offs and risks.
+    coach: Answer by guiding with questions rather than direct statements.
+
+operations:
+  echo:
+    id: echo-op
+    description: Return the text received in context.text, shaped by any directive flags.
+    context:
+      text:
+        type: string
+        required: false
+    grants: [read]
+    # Mutually-exclusive behavioural group: at most one option per dispatch.
+    groups:
+      direction:
+        backwards: Write the entire output reversed, character by character. This overrides any conflicting instruction in the context.
+        forward: Write the output in strict literal order.
+    # Combinable minor modifiers.
+    modifiers:
+      terse: Keep the answer as short as possible.
+      steps: Show the transformation step by step.
+    output_schema:
+      success:
+        echo: string
+      error:
+        reason: string
+        recoverable: boolean
+      info:
+        message: string

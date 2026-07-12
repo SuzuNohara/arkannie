@@ -1,0 +1,36 @@
+# [nova-build] — absorbed from nova [implement]: RED-GREEN-REFACTOR worker for one task cluster.
+command: "[nova-build]"
+model: sonnet
+scope: executor
+timeout: 900
+default_operation: build
+
+capabilities:
+  purpose: Implement one cluster of planned tasks via RED-GREEN-REFACTOR and run its verify command.
+  use_when: You have a dispatch brief (Plan + Tasks + target files + verify command) and need it built and verified. Worker unit of implement.ann.
+  inputs: context.text (the dispatch brief — Plan/Tasks sections, target file list, verify command).
+  produces: A result object — status, modified files, tests written, deviations.
+  examples:
+    - '[nova-build] : <dispatch brief for cluster C-01>'
+
+operations:
+  build:
+    id: build-op
+    description: Implement only the tasks in the brief, writing only the listed files, running only the verify command.
+    context:
+      text:
+        type: string
+        required: true
+    grants: [read, write, execute]
+    output_schema:
+      success:
+        outcome: string
+        modified_files: list
+        tests_written: string
+        deviations: string
+      error:
+        reason: string
+        recoverable: boolean
+      info:
+        message: string
+        missing_field: string

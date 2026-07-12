@@ -1,0 +1,174 @@
+# Ann Agent Schema v0.1
+# Normative schema for all [agent].md files in .arkannie/
+# Validation rules: VAL-01 through VAL-09
+# New-command wizard: see wizard_flow comment block at bottom of this file
+
+schema_version: "1.0"
+ann_version: "v0.1"
+
+# ── Top-level fields ───────────────────────────────────────────────────────────
+
+command:
+  required: true
+  type: string
+  description: "Command token including brackets, e.g. '[seeker]'"
+  pattern: "^\\[[a-z][a-z0-9\\-]*\\]$"
+
+command_type:
+  required: true
+  type: string
+  enum: [wave, native]
+  description: "wave = dispatched via Agent(); native = executed by Arkannie directly"
+
+agent_type:
+  required: false
+  type: string
+  description: "Optional classification label (e.g. 'analyst', 'executor', 'evaluator')"
+
+timeout:
+  required: false
+  type: integer
+  description: "Default timeout in seconds for all operations in this agent. Overridden by --timeout flag."
+  minimum: 1
+
+# ── Operations map ─────────────────────────────────────────────────────────────
+
+operations:
+  required: true
+  type: map
+  description: "Map of operation_name -> _operation_entry. At least one operation required."
+
+  _operation_entry:
+    description:
+      required: true
+      type: string
+      description: "Human-readable description of what this operation does"
+
+    id:
+      required: true
+      type: string
+      description: "Stable identifier for this operation, used in correlation and logging"
+      pattern: "^[a-z][a-z0-9\\-]*$"
+
+    context:
+      required: false
+      type: map
+      description: "Named inputs Arkannie passes in context_block.context. Each key is a context field."
+
+      _context_field:
+        type:
+          required: true
+          type: string
+          enum: [string, integer, boolean, list, map]
+        required:
+          required: true
+          type: boolean
+        description:
+          required: false
+          type: string
+
+    flags:
+      required: false
+      type: map
+      description: "Named flags that may appear as --flag or --flag=value on the dispatch atom"
+
+      _flag_entry:
+        type:
+          required: true
+          type: string
+          enum: [boolean, string, integer]
+          description: "boolean = presence flag (--flag); string/integer = valued flag (--flag=value)"
+        required:
+          required: true
+          type: boolean
+        description:
+          required: false
+          type: string
+        default:
+          required: false
+          description: "Default value if flag is absent"
+
+    grants:
+      required: false
+      type: list
+      description: "Tool access grants for this operation. Values from: read, write, execute, network"
+      items:
+        type: string
+        enum: [read, write, execute, network]
+
+    output_schema:
+      required: true
+      type: map
+      description: "Defines the shape of all three possible return statuses"
+
+      success:
+        required: true
+        type: map
+        description: "Fields present in payload when status=success"
+
+      error:
+        required: true
+        type: map
+        description: "Fields present in payload when status=error. 'reason' and 'recoverable' always required."
+        properties:
+          reason:
+            type: string
+            required: true
+          recoverable:
+            type: boolean
+            required: true
+
+      info:
+        required: false
+        type: map
+        description: "Fields present in payload when status=info. Omit if this operation never returns info."
+        properties:
+          message:
+            type: string
+            required: true
+
+
+# ── Validation Rules ───────────────────────────────────────────────────────────
+#
+# VAL-01: command must match pattern ^\\[[a-z][a-z0-9\\-]*\\]$
+# VAL-02: command_type must be "wave" or "native" — no other values
+# VAL-03: operations must have at least one entry
+# VAL-04: every operation must have description, id, and output_schema
+# VAL-05: output_schema.success must be present (may be empty map {})
+# VAL-06: output_schema.error must define reason (string) and recoverable (boolean)
+# VAL-07: operation id must be unique within the file
+# VAL-08: flag types must be boolean, string, or integer — no other values
+# VAL-09: grants values must be from the set {read, write, execute, network}
+
+
+# ── [new-command] Wizard Flow ──────────────────────────────────────────────────
+#
+# The [new-command] wizard is a 5-phase interactive sequence for adding a new
+# agent command to .arkannie/. It is the ONLY mechanism that may write to .arkannie/.
+#
+# Phase 1 — Name and type
+#   Arkannie asks: command name, wave or native, optional agent_type label
+#   Output: draft `command` and `command_type` fields
+#
+# Phase 2 — Operations
+#   Arkannie asks: list of operation names and their descriptions
+#   For each operation: context fields (name, type, required), flags, grants
+#   Output: draft `operations` map
+#
+# Phase 3 — Output schema
+#   Arkannie asks for each operation: what does success look like? what does error look like? info?
+#   Output: draft `output_schema` blocks for each operation
+#
+# Phase 4 — Review
+#   Arkannie renders the complete [agent].md in final format and presents for review
+#   Developer may request changes — Arkannie revises and re-renders
+#   No file is written in this phase
+#
+# Phase 5 — Confirm and write
+#   Arkannie states: "I am about to write [agent].md to .arkannie/. This will make [command] available."
+#   Developer must confirm with explicit "yes, write it" or equivalent
+#   Arkannie writes [agent].md to registry_path
+#   Arkannie reports: "Command [name] is now registered. Available after next startup or scan."
+#
+# If the developer says "cancel" at any phase: Arkannie discards draft, no file written.
+# If Arkannie is interrupted between Phase 4 and Phase 5: no file written.

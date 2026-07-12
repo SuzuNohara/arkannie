@@ -1,0 +1,41 @@
+# [nova-investigate] — absorbed from nova [investigation]/[diagnose]: formal codebase investigation.
+command: "[nova-investigate]"
+model: opus
+scope: executor
+timeout: 600
+default_operation: investigate
+
+capabilities:
+  purpose: Run a formal codebase investigation and return a structured findings report.
+  use_when: You need to reconstruct use-cases/rules from code+git (reverse), assess future impact (predictive), or map local expertise (knowledge).
+  inputs: context.text (topic/slug + focus); --path; modifiers --reverse/--predictive/--knowledge (combinable).
+  produces: A markdown investigation report ending in a disposition-ready findings section.
+  examples:
+    - '[nova-investigate] --reverse --path=src/billing : why does invoicing double-charge on retry?'
+    - '[nova-investigate] --predictive --knowledge : impact of splitting the auth module'
+
+operations:
+  investigate:
+    id: investigate-op
+    description: Investigate the topic across code and git history through the selected lenses; infer the lens if none is given.
+    context:
+      text:
+        type: string
+        required: true
+    grants: [read, execute]
+    flags:
+      path:
+        type: string
+    modifiers:
+      reverse: "Reconstruct use-cases, business rules and architectural decisions from code + git history."
+      predictive: "Analyze future impact, coupling risks and evolution vectors."
+      knowledge: "Map local expertise and identify knowledge gaps."
+    output_schema:
+      success:
+        report: string
+      error:
+        reason: string
+        recoverable: boolean
+      info:
+        message: string
+        missing_field: string

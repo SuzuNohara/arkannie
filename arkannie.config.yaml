@@ -1,0 +1,7 @@
+# arkannie.config.yaml — configuración operativa del runtime de arkannie
+# Todas las claves son opcionales; los valores mostrados son los defaults.
+# Descomenta una clave para sobreescribir su default.
+
+# timeout_default: 120   # segundos por invocación de agente (debe ser > 0)
+# max_concurrency: 4     # procesos claude simultáneos (debe ser > 0)
+# claude_bin: claude     # binario del CLI de claude (nombre en PATH o ruta)

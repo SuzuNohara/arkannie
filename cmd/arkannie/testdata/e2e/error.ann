@@ -1,0 +1,4 @@
+# ann v0.1
+// E2E-error: the wave returns status error and there is no error -> {} handler,
+// so the run escalates (Class B) and the program exits 1.
+[echo] --id=fail : boom

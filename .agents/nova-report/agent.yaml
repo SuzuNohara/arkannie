@@ -1,0 +1,40 @@
+# [nova-report] — absorbed from nova [report]: aggregate development metrics into a dated report.
+command: "[nova-report]"
+model: sonnet
+scope: agnostic
+timeout: 180
+default_operation: report
+
+capabilities:
+  purpose: Aggregate development metrics from activity records into a dated report.
+  use_when: You need a velocity/coverage/quality report over a date range built from metrics blocks.
+  inputs: context.text (optional narrative focus); --from/--to (ISO dates); --path=<dir of activity files>.
+  produces: A markdown report — aggregated metrics table, narrative, and per-wave breakdown.
+  examples:
+    - '[nova-report] --from=2026-06-01 --to=2026-06-30 --path=.activities'
+    - '[nova-report] : summarize everything on record'
+
+operations:
+  report:
+    id: report-op
+    description: Read activity metrics blocks under path, filter by completed_at in [from,to], compute the metric table and narrative.
+    context:
+      text:
+        type: string
+        required: false
+    grants: [read]
+    flags:
+      from:
+        type: string
+      to:
+        type: string
+      path:
+        type: string
+    output_schema:
+      success:
+        report: string
+      error:
+        reason: string
+        recoverable: boolean
+      info:
+        message: string

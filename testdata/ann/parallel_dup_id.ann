@@ -1,0 +1,5 @@
+# ann v0.1
+parallel {
+  [seeker] --id=same one
+  [reviewer] --id=same two
+}

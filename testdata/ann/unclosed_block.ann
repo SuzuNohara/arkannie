@@ -1,0 +1,4 @@
+# ann v0.1
+[seeker] auth
+  success -> {
+    [notify] partial

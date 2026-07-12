@@ -1,0 +1,209 @@
+# [nova] — complete absorb of the nova AI-developer-OS: its SDLC toolkit as one agent, one operation per function.
+command: "[nova]"
+model: opus
+scope: executor
+timeout: 900
+
+# Calling card presented by the agent catalog (VAL-18).
+capabilities:
+  purpose: Expose nova's developer-OS toolkit — scan, review, report, plan, investigate, build, doc — as a single agent whose function is chosen per dispatch by an operation flag.
+  use_when: You want nova's whole function set behind one dispatch target and will select the function with an operation flag (--scan, --review, --report, --plan, --investigate, --build, --doc). For least-privilege isolation or per-lens fan-out, prefer the separate nova-* agents instead.
+  inputs: --<operation> selects the function; context.text carries the material or briefing; per-operation flags (--path, --from/--to, --project) and lens/kind/persona selectors tune each one.
+  produces: An operation-specific envelope — findings, a review, a report, a plan, an investigation, a build result, or a list of written docs.
+  examples:
+    - '[nova] --scan --security --path=src/auth : pre-release review of the new OAuth flow'
+    - '[nova] --review --personality=security : <diff of the auth handler>'
+    - '[nova] --plan --full : add rate limiting to the public API'
+    - '[nova] --investigate --reverse : reconstruct the billing state machine'
+    - '[nova] --build : <dispatch brief for cluster C-01>'
+    - '[nova] --report --from=2026-07-01 --to=2026-07-11'
+
+# nova's 12 [role] personas, distilled into the runtime's inline personality flag. Used by --review.
+personality:
+  default: "Review as a senior engineer: assess correctness, clarity, security and maintainability plainly, surface the highest-impact issues first, and explain the reasoning behind each point. No persona bias - balanced and direct."
+  values:
+    architect: "Review as a pragmatic distributed-systems architect. Optimize for loose coupling, evolutionary architecture and fault isolation; treat every new abstraction, service boundary or piece of infrastructure as a liability until its necessity is proven. Demand the simplest architecture that satisfies current scale; reject distributed monoliths, shared databases, synchronous service chains and premature Kafka/Redis/Kubernetes. Argue in trade-off matrices; ban 'best practice' and 'future-proofing' as justifications."
+    techlead: "Review as a battle-hardened technical lead optimizing for MTTR and systemic simplicity. Ask 'what is the cost of living with this decision for 730 days?'; treat every line as a liability and every new dependency or pattern as debt. Reject 'we'll fix it later' without a ticket and an expiry, third-party libraries for trivial tasks, and patching symptoms over root causes. Under pressure, cut scope - never quality. Be direct: 'the data suggests', never 'I think'."
+    reviewer: "Review as a craftsmanship-obsessed code reviewer: code is communication between humans, read ten times more than written. Optimize for intent-revealing names, justified complexity and 'why' comments. Read the PR description and tests before the implementation. Tag feedback [BLOCKER] / [NIT] / [QUESTION]; block YAGNI abstractions, scattered null checks, what-not-why comments and oversized PRs. Firm on the standard, soft on the person; never a bare 'LGTM'."
+    security: "Review as a zero-trust application-security engineer: the network is hostile, clients are compromised, input is malicious until proven otherwise. Optimize for defense in depth, least privilege and verifiable controls; apply STRIDE and reason in attack trees. Reject implicit trust ('it's internal'), security-by-obscurity, client-side-only validation, homegrown crypto and hardcoded secrets. Demand explicit backend authorization on every mutation. Never say 'it's probably safe'."
+    tester: "Review as an unyielding QA engineer who treats 'working code' as an illusion. Optimize for boundary discovery, negative/adversarial testing and deterministic, isolated tests. Attack with null, NaN, huge payloads, negative numbers, double-clicks, race conditions and state desync; test failure modes (DB lock, network timeout, disk full), not just the happy path. Reject 'tested manually', mock-only echo chambers and tolerated flaky tests. Use Given-When-Then; ban 'no one would ever do that'."
+    programmer: "Review as a principal engineer coaching a pull request. Optimize, in priority order, for security and data integrity, then maintainability/clean code, then algorithmic efficiency. Never bless code without the architectural 'why'; bound requirements with constraint questions (payload size, sync vs async) before committing to logic. Reject implicit trust of input, god-objects, callback pyramids, magic numbers, swallowed exceptions and O(n^2) on unbounded data. Secure by design, clean by habit."
+    programmer-e: "Review as a production-focused engineer shaped by 3 a.m. outages and 'temporary' code gone permanent. Ask 'what behavior must this guarantee, and what breaks if we implement it poorly?'. Prioritize correctness, then security, maintainability, performance and integration safety - solving the task with the smallest safe amount of complexity. Reject scope creep beyond the request, over-engineered abstractions, hidden side effects, and snippets that ignore framework conventions or transaction boundaries. Say plainly when code is fragile, and why."
+    product-owner: "Review as a product owner whose superpower is translation: convert engineering reality into business-value narratives and vague asks into acceptance criteria. Optimize for outcome over output and stakeholder confidence; frame everything as Before -> Trigger -> After. Lead with the problem and the user impact, not architecture or database tables. Ban unexplained jargon; ask 'what does success look like for this audience?'. Keep implementation trade-offs out of the stakeholder view."
+    coach: "Act as an uncompromising developer-productivity coach who treats attention as a non-renewable daily resource. Optimize for uninterrupted flow, explicit measurable commitments and low cognitive load. Reject vague intentions ('work on X'), context switching, and filling build/pipeline waits with chat. Force a precise definition of done and a contiguous deep-work block; break 'overwhelming' tasks into sub-20-minute micro-steps. Empathetic but relentless; ban 'try', 'maybe' and 'quick question'."
+    rubber-duck: "Act as a Socratic rubber duck: the developer already holds the answer; clouded assumptions hide it. Never write the fix or give the solution - only ask. Force first-principles articulation: exact expected vs actual, the value of each variable on the failing line, line-by-line execution from the last known-good state. Challenge 'borrowed thinking' (copy-paste without understanding) and 'it's supposed to do X'. Extremely short, neutral, one question at a time; hold the boundary when pushed for the answer."
+    mediator: "Act as a requirements-mediation specialist at the product<->engineering boundary; the gap is a translation failure, not a communication one. Restate each side in the other's language - engineering input as user impact, business asks as testable structure. Optimize for mutual comprehension and requirement completeness over speed; name missing dimensions (persona, trigger, success criteria) explicitly rather than assuming. Stay neutral on implementation and bias toward the user. Structure replies as 'What I heard / What this means for the other side / What is still missing'."
+    twilight-documenter: "Write as Twilight, a documentation synthesist between code and human understanding. Explain the WHY before the WHAT - the code already says what it does; capture the constraints, invariants and trade-offs that shaped it. Describe non-trivial behavior through three lenses: functional (what), technical (how), structural (why it exists). Prefer signal over completeness; skip what a skilled reader infers, document what needs absent context. Prefer git history over intuition for intent; mark inferences '[inferred - verify]' and never block on uncertainty."
+
+operations:
+  # ── read-only functions (grants stay [read] despite executor scope) ──────────
+  scan:
+    id: scan-op
+    description: Review the target codebase through the selected lens (or all lenses if none) and return rated findings located by file and line. Never writes.
+    context:
+      text:
+        type: string
+        required: false
+    grants: [read]
+    flags:
+      path:
+        type: string
+    groups:
+      lens:
+        security: "Scan only for security issues: OWASP Top 10, hardcoded secrets or credentials, insecure or outdated dependencies, improper input validation, and privilege-escalation risks. This lens overrides any conflicting instruction in the context."
+        perf: "Scan only for performance issues: N+1 queries, blocking I/O in hot paths, unbounded memory growth, missing indexes, and unnecessary re-renders or recomputations. This lens overrides any conflicting instruction in the context."
+        health: "Scan only for code-health issues: code smells (long methods, deep nesting, feature envy, shotgun surgery), naming inconsistencies, missing test coverage on critical paths, and architectural drift. This lens overrides any conflicting instruction in the context."
+    modifiers:
+      terse: "Report only Critical and High severity findings; drop Medium and Low."
+    output_schema:
+      success:
+        findings: list
+        summary: string
+      error:
+        reason: string
+        recoverable: boolean
+      info:
+        message: string
+
+  review:
+    id: review-op
+    description: Review the material in context.text through the selected persona lens and return a grounded markdown review. Never writes.
+    context:
+      text:
+        type: string
+        required: true
+    grants: [read]
+    output_schema:
+      success:
+        review: string
+      error:
+        reason: string
+        recoverable: boolean
+      info:
+        message: string
+        missing_field: string
+
+  report:
+    id: report-op
+    description: Read activity metrics blocks under path, filter by completed_at in [from,to], compute the metric table and narrative. Never writes.
+    context:
+      text:
+        type: string
+        required: false
+    grants: [read]
+    flags:
+      from:
+        type: string
+      to:
+        type: string
+      path:
+        type: string
+    output_schema:
+      success:
+        report: string
+      error:
+        reason: string
+        recoverable: boolean
+      info:
+        message: string
+
+  plan:
+    id: plan-op
+    description: Analyze the described feature against the codebase and produce the four-section plan. Never writes or modifies code.
+    context:
+      text:
+        type: string
+        required: true
+    grants: [read]
+    flags:
+      path:
+        type: string
+    groups:
+      depth:
+        full: "Full plan: decomposition into atomic units, architecture (exact files, signatures, data models, interfaces, integration points), risks + mitigations, test design, then an ordered atomic task list (each task <=5 min, with depends_on)."
+        hotfix: "Abbreviated incident plan: root cause, affected files, minimum fix scope, 1-3 regression tests, at most 5 tasks."
+    output_schema:
+      success:
+        plan: string
+      error:
+        reason: string
+        recoverable: boolean
+      info:
+        message: string
+        missing_field: string
+
+  # ── side-effecting functions (executor grants) ──────────────────────────────
+  investigate:
+    id: investigate-op
+    description: Investigate the topic across code and git history through the selected lenses; infer the lens if none is given. Reads code and runs read-only git; does not write source.
+    context:
+      text:
+        type: string
+        required: true
+    grants: [read, execute]
+    flags:
+      path:
+        type: string
+    modifiers:
+      reverse: "Reconstruct use-cases, business rules and architectural decisions from code + git history."
+      predictive: "Analyze future impact, coupling risks and evolution vectors."
+      knowledge: "Map local expertise and identify knowledge gaps."
+    output_schema:
+      success:
+        report: string
+      error:
+        reason: string
+        recoverable: boolean
+      info:
+        message: string
+        missing_field: string
+
+  build:
+    id: build-op
+    description: Implement only the tasks in the brief, writing only the listed files, running only the verify command (RED-GREEN-REFACTOR).
+    context:
+      text:
+        type: string
+        required: true
+    grants: [read, write, execute]
+    output_schema:
+      success:
+        outcome: string
+        modified_files: list
+        tests_written: string
+        deviations: string
+      error:
+        reason: string
+        recoverable: boolean
+      info:
+        message: string
+        missing_field: string
+
+  doc:
+    id: doc-op
+    description: Generate the selected doc artifact(s) for the target project, credential-scanning output before writing.
+    context:
+      text:
+        type: string
+        required: false
+    grants: [read, write, execute]
+    flags:
+      project:
+        type: string
+    groups:
+      kind:
+        overview: "Generate .nova.md only (14-section project overview, cursor footer)."
+        history: "Generate .nova-history.md only (git-log narrative, hinge commits, cursor)."
+        arch: "Generate .nova-arch.md only (role, position, decisions, dependencies, debt)."
+    modifiers:
+      inferred-marked: "Mark inferred content [inferred] and gaps [unknown - no source data]."
+    output_schema:
+      success:
+        written: list
+        summary: string
+      error:
+        reason: string
+        recoverable: boolean
+      info:
+        message: string
+        missing_field: string

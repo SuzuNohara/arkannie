@@ -1,0 +1,9 @@
+# ann v0.1
+// E2E-parallel: two concurrent dispatches, both routed through each -> {}.
+parallel {
+  [echo] --id=a : x
+  [echo] --id=b : y
+}
+  each -> {
+    [notify] done
+  }

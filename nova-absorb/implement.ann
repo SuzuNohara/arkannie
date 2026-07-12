@@ -1,0 +1,17 @@
+# ann v0.1
+// Recomposition of nova [implement]: iterate task-cluster briefs, building each
+// via nova-build (the RED-GREEN-REFACTOR worker). The wave state (the briefs) is
+// externalized into a list; nova's wave scheduling + reviewer loop collapse to a
+// sequential foreach. Run with --allow-workspace (nova-build is executor).
+//
+// NOTE: illustrative briefs — a real run supplies briefs produced by nova-plan.
+$briefs = list("Brief C-01: file src/foo.js; task T1 implement add(a,b); verify: npm test -- add.spec.js", "Brief C-02: file src/bar.js; task T2 implement sub(a,b); verify: npm test -- sub.spec.js")
+foreach $briefs {
+  [nova-build] : "$item"
+    success -> {
+      [notify] "built ok"
+    }
+    error -> {
+      [notify] "build failed"
+    }
+}

@@ -1,0 +1,45 @@
+# [nova-doc] — absorbed from nova [doc]: per-project documentation generation.
+command: "[nova-doc]"
+model: sonnet
+scope: executor
+timeout: 600
+default_operation: doc
+
+capabilities:
+  purpose: Generate documentation for one project (.nova.md / .nova-history.md / .nova-arch.md) from source + git history.
+  use_when: You need per-project docs regenerated in the twilight-documenter voice; one dispatch per project.
+  inputs: context.text (optional focus); --project=<path>; group kind selects the artifact (absent = all three).
+  produces: The written doc file list plus a summary; never modifies source, never auto-commits.
+  examples:
+    - '[nova-doc] --project=projects/api --history'
+    - '[nova-doc] --project=projects/api'
+
+operations:
+  doc:
+    id: doc-op
+    description: Generate the selected doc artifact(s) for the target project, credential-scanning output before writing.
+    context:
+      text:
+        type: string
+        required: false
+    grants: [read, write, execute]
+    flags:
+      project:
+        type: string
+    groups:
+      kind:
+        overview: "Generate .nova.md only (14-section project overview, cursor footer)."
+        history: "Generate .nova-history.md only (git-log narrative, hinge commits, cursor)."
+        arch: "Generate .nova-arch.md only (role, position, decisions, dependencies, debt)."
+    modifiers:
+      inferred-marked: "Mark inferred content [inferred] and gaps [unknown - no source data]."
+    output_schema:
+      success:
+        written: list
+        summary: string
+      error:
+        reason: string
+        recoverable: boolean
+      info:
+        message: string
+        missing_field: string

@@ -1,0 +1,13 @@
+# ann v0.1
+// Recomposition of nova [audit]: three lenses scanned in PARALLEL over the same
+// target, each lens's findings returned to the output body. Mirrors nova's
+// 3-parallel-Explore fan-out. Final dedup/rating aggregation would add one
+// synthesizer agent; here each lens is returned verbatim.
+parallel {
+  [nova-scan] --id=sec    --security --path=nova-absorb/fixture : "audit fan-out smoke"
+  [nova-scan] --id=perf   --perf     --path=nova-absorb/fixture : "audit fan-out smoke"
+  [nova-scan] --id=health --health   --path=nova-absorb/fixture : "audit fan-out smoke"
+}
+each -> {
+  [return] --id=scan $result
+}

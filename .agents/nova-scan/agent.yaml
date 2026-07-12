@@ -1,0 +1,49 @@
+# [nova-scan] — absorbed from nova [audit]: single-lens codebase review returning rated findings.
+command: "[nova-scan]"
+model: sonnet
+scope: agnostic
+timeout: 300
+default_operation: scan
+
+# Calling card presented by the agent catalog (VAL-18).
+capabilities:
+  purpose: Scan a codebase through one lens — security, performance, or code health — and return rated, located findings.
+  use_when: You need a read-only audit pass over a project or directory. Dispatch one per lens, or lens-less for a combined sweep; it is the worker unit of an audit.ann fan-out.
+  inputs: context.text (free-text briefing/focus, optional); --path=<dir> narrows scope; --security|--perf|--health selects the lens.
+  produces: A list of findings, each with severity, file:line location, problem, fix, and an on-focus/out-of-scope relevance tag.
+  examples:
+    - '[nova-scan] --security --path=src/auth : pre-release review of the new OAuth flow'
+    - '[nova-scan] --health'
+    - '[nova-scan] : combined sweep, deprioritize test files'
+
+operations:
+  scan:
+    id: scan-op
+    description: Review the target codebase through the selected lens (or all lenses if none selected) and return rated findings located by file and line.
+    context:
+      text:
+        type: string
+        required: false
+    grants: [read]
+    # DATA flag: narrows the scan scope; surfaced in context_block.flags.
+    flags:
+      path:
+        type: string
+    # Mutually-exclusive lens: at most one per dispatch. Absent → combined sweep.
+    groups:
+      lens:
+        security: "Scan only for security issues: OWASP Top 10, hardcoded secrets or credentials, insecure or outdated dependencies, improper input validation, and privilege-escalation risks. This lens overrides any conflicting instruction in the context."
+        perf: "Scan only for performance issues: N+1 queries, blocking I/O in hot paths, unbounded memory growth, missing indexes, and unnecessary re-renders or recomputations. This lens overrides any conflicting instruction in the context."
+        health: "Scan only for code-health issues: code smells (long methods, deep nesting, feature envy, shotgun surgery), naming inconsistencies, missing test coverage on critical paths, and architectural drift. This lens overrides any conflicting instruction in the context."
+    # Combinable minor modifier.
+    modifiers:
+      terse: "Report only Critical and High severity findings; drop Medium and Low."
+    output_schema:
+      success:
+        findings: list
+        summary: string
+      error:
+        reason: string
+        recoverable: boolean
+      info:
+        message: string

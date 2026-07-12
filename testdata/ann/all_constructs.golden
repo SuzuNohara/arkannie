@@ -1,0 +1,29 @@
+Program
+  Dispatch line=4 cmd=seeker args=["auth"] id="" ctx="" flags={depth="full" verbose=""}
+  Dispatch line=5 cmd=activity args=["act-001"] id="" ctx="single {{ slot }} and $ref context" flags={}
+  Dispatch line=6 cmd=activity args=["act-002"] id="" ctx="first context line\nsecond context line" flags={}
+  Assign line=10 name=report
+    Dispatch line=10 cmd=seeker args=["query"] id="" ctx="find auth traces" flags={}
+  Assign line=11 name=title
+    StrLit "literal with {{ slot | fallback }} and $binding"
+  Assign line=12 name=items
+    ListLit ["alpha" "$title" "gamma"]
+  Dispatch line=14 cmd=reviewer args=["$report"] id="" ctx="" flags={}
+    Handler success
+      Assign line=16 name=ok
+        StrLit "yes"
+      Dispatch line=17 cmd=notify args=["stored"] id="" ctx="" flags={}
+    Handler error
+      Dispatch line=20 cmd=ask-user args=["retry" "now"] id="" ctx="" flags={}
+    Handler info
+  Parallel line=24
+    Dispatch line=25 cmd=seeker args=["alpha"] id="seek-a" ctx="" flags={id="seek-a"}
+    Dispatch line=26 cmd=reviewer args=["beta"] id="rev-b" ctx="parallel context" flags={id="rev-b"}
+    Each
+      Dispatch line=29 cmd=notify args=["$result"] id="" ctx="" flags={}
+  Foreach line=32 list=$items
+    Dispatch line=33 cmd=seeker args=["$item"] id="" ctx="" flags={}
+  Loop line=36 limit=3
+    Dispatch line=37 cmd=seeker args=["again"] id="" ctx="" flags={}
+      Handler success
+        Dispatch line=39 cmd=notify args=["done"] id="" ctx="" flags={}

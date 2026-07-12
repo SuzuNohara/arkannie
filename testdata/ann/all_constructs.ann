@@ -1,0 +1,41 @@
+# ann v0.1
+// all supported constructs §8
+
+[seeker] auth --verbose --depth=full
+[activity] act-001 : single {{ slot }} and $ref context
+[activity] act-002 :
+  first context line
+  second context line
+
+$report = [seeker] query : find auth traces
+$title = "literal with {{ slot | fallback }} and $binding"
+$items = list("alpha", $title, "gamma")
+
+[reviewer] $report
+  success -> {
+    $ok = "yes"
+    [notify] stored
+  }
+  error -> {
+    [ask-user] retry now
+  }
+  info -> {}
+
+parallel {
+  [seeker] --id=seek-a alpha
+  [reviewer] --id=rev-b beta : parallel context
+}
+  each -> {
+    [notify] $result
+  }
+
+foreach $items {
+  [seeker] $item
+}
+
+loop limit=3 {
+  [seeker] again
+    success -> {
+      [notify] done
+    }
+}

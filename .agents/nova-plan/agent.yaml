@@ -1,0 +1,41 @@
+# [nova-plan] — absorbed from nova [planning]/[engineering]/[hotfix]: produce an implementation plan, no code.
+command: "[nova-plan]"
+model: opus
+scope: agnostic
+timeout: 600
+default_operation: plan
+
+capabilities:
+  purpose: Produce a complete implementation plan (Spec/Plan/Tasks/Tests, EARS + R-ids) for a feature — no code written.
+  use_when: You need an architecture and task breakdown before implementation; full for features, hotfix for incidents.
+  inputs: context.text (feature/problem description, optional embedded problem brief); --path narrows the codebase read.
+  produces: A markdown plan with the four mandatory sections, tasks carrying R-id references.
+  examples:
+    - '[nova-plan] --full : add refresh-token rotation to the auth service'
+    - '[nova-plan] --hotfix : 500s on /checkout when the cart is empty'
+
+operations:
+  plan:
+    id: plan-op
+    description: Analyze the described feature against the codebase and produce the four-section plan. Never write or modify code.
+    context:
+      text:
+        type: string
+        required: true
+    grants: [read]
+    flags:
+      path:
+        type: string
+    groups:
+      depth:
+        full: "Full plan: decomposition into atomic units, architecture (exact files, signatures, data models, interfaces, integration points), risks + mitigations, test design, then an ordered atomic task list (each task <=5 min, with depends_on)."
+        hotfix: "Abbreviated incident plan: root cause, affected files, minimum fix scope, 1-3 regression tests, at most 5 tasks."
+    output_schema:
+      success:
+        plan: string
+      error:
+        reason: string
+        recoverable: boolean
+      info:
+        message: string
+        missing_field: string
