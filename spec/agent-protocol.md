@@ -2,7 +2,7 @@
 
 ## Document Authority
 
-This file is the normative specification for all inter-agent communication in Arkannie2. It overrides any description of envelope format, timeout behavior, or grant inheritance in any other file.
+This file is the normative specification for all inter-agent communication in arkannie. It overrides any description of envelope format, timeout behavior, or grant inheritance in any other file.
 
 ---
 

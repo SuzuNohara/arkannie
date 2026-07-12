@@ -259,7 +259,7 @@ Classification is deterministic. Arkannie checks in order and takes the first ma
 6. Else → parse error: unknown command [command]
 ```
 
-**v0.1 command registry** — commands guaranteed present in every Arkannie2 installation:
+**v0.1 command registry** — commands guaranteed present in every arkannie installation:
 
 | Command | Type | Source |
 |---|---|---|
