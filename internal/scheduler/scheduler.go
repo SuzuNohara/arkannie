@@ -411,22 +411,43 @@ func (s *Scheduler) execForeach(st *execState, f *ann.Foreach) *Escalation {
 	return nil
 }
 
-// execLoop runs the body up to Limit times (§6.7); no implicit break.
+// execLoop runs the body up to Limit times (§6.7). A non-nil Until is a §8
+// post-condition guard evaluated after each body and BEFORE that iteration's
+// scope is popped, so it sees the bindings the body created: the loop breaks
+// early once the guard holds. A composite operand is a Class A notice treated
+// as unmet, so the loop still runs to Limit and the program continues.
 func (s *Scheduler) execLoop(st *execState, l *ann.Loop) *Escalation {
 	st.loopDepth++
 	defer func() { st.loopDepth-- }()
 	for i := 0; i < l.Limit; i++ {
 		st.ram.Push()
 		esc := s.runStatements(st, l.Body, 0, false)
+		done := esc == nil && !st.stop && s.untilMet(st, l.Until)
 		st.ram.Pop()
 		if esc != nil {
 			return esc
 		}
-		if st.stop {
+		if st.stop || done {
 			return nil
 		}
 	}
 	return nil
+}
+
+// untilMet evaluates a loop's until post-condition against the current RAM
+// scope (call before the iteration Pop). A nil guard is never met. A composite
+// operand is not comparable: a Class A notice, treated as unmet (§8, R9).
+func (s *Scheduler) untilMet(st *execState, g *ann.Guard) bool {
+	if g == nil {
+		return false
+	}
+	met, skipKind := compareOperands(st.ram, g.Left, g.Op, g.Right)
+	if skipKind != "" {
+		s.Notices = append(s.Notices, fmt.Sprintf(
+			"[class A] loop until guard: operand resolved to a %s value, not comparable — treated as unmet", skipKind))
+		return false
+	}
+	return met
 }
 
 // guardVal is one operand of an if guard reduced to its comparable form:
@@ -466,16 +487,25 @@ func (s *Scheduler) execIf(st *execState, ifs *ann.If) *Escalation {
 // ("map"/"list") means a composite operand was found and the caller must skip
 // the statement. Null resolves for an irresolvable ref; null==null is true.
 func (s *Scheduler) evalGuard(st *execState, ifs *ann.If) (bool, string) {
-	l := resolveOperand(st.ram, ifs.Left)
-	r := resolveOperand(st.ram, ifs.Right)
+	return compareOperands(st.ram, ifs.Left, ifs.Op, ifs.Right)
+}
+
+// compareOperands applies the deterministic ==/!= comparison shared by if
+// conditions and loop until post-conditions (§8). It returns the guard result
+// and a skip kind: a non-empty kind ("map"/"list") means a composite operand
+// was found and the caller must treat the guard as not comparable. Null
+// resolves for an irresolvable ref; null==null is true.
+func compareOperands(r *ram.RAM, left ann.Operand, op string, right ann.Operand) (bool, string) {
+	l := resolveOperand(r, left)
+	rt := resolveOperand(r, right)
 	if l.compound != "" {
 		return false, l.compound
 	}
-	if r.compound != "" {
-		return false, r.compound
+	if rt.compound != "" {
+		return false, rt.compound
 	}
-	eq := (l.isNull && r.isNull) || (!l.isNull && !r.isNull && l.str == r.str)
-	if ifs.Op == "!=" {
+	eq := (l.isNull && rt.isNull) || (!l.isNull && !rt.isNull && l.str == rt.str)
+	if op == "!=" {
 		eq = !eq
 	}
 	return eq, ""
