@@ -304,6 +304,214 @@ func TestForeachLoop(t *testing.T) {
 	})
 }
 
+func TestIfStatements(t *testing.T) {
+	t.Run("ref_dot_eq_string_then_only", func(t *testing.T) {
+		src := "if $x.status == \"ok\" {\n  [notify] good\n}\n"
+		iff := mustParse(t, src, PromptMode).Statements[0].(*If)
+		if !iff.Left.IsRef || iff.Left.Text != "x.status" {
+			t.Errorf("left = %+v, want ref x.status", iff.Left)
+		}
+		if iff.Op != "==" {
+			t.Errorf("op = %q, want ==", iff.Op)
+		}
+		if iff.Right.IsRef || iff.Right.IsNull || iff.Right.Text != "ok" {
+			t.Errorf("right = %+v, want string ok", iff.Right)
+		}
+		if len(iff.Then) != 1 {
+			t.Fatalf("then = %d stmts, want 1", len(iff.Then))
+		}
+		if iff.Else != nil {
+			t.Errorf("else = %v, want nil", iff.Else)
+		}
+		if iff.Line != 1 {
+			t.Errorf("line = %d, want 1", iff.Line)
+		}
+	})
+	t.Run("with_else_block", func(t *testing.T) {
+		src := "if $x == \"ok\" {\n  [notify] good\n}\nelse {\n  [notify] bad\n}\n"
+		iff := mustParse(t, src, PromptMode).Statements[0].(*If)
+		if len(iff.Then) != 1 || len(iff.Else) != 1 {
+			t.Fatalf("then=%d else=%d, want 1/1", len(iff.Then), len(iff.Else))
+		}
+	})
+	t.Run("ne_operator", func(t *testing.T) {
+		src := "if $x != \"ok\" {\n  [notify] n\n}\n"
+		iff := mustParse(t, src, PromptMode).Statements[0].(*If)
+		if iff.Op != "!=" {
+			t.Errorf("op = %q, want !=", iff.Op)
+		}
+	})
+	t.Run("ref_without_dot", func(t *testing.T) {
+		src := "if $x == \"y\" {\n  [notify] n\n}\n"
+		iff := mustParse(t, src, PromptMode).Statements[0].(*If)
+		if !iff.Left.IsRef || iff.Left.Text != "x" {
+			t.Errorf("left = %+v, want ref x", iff.Left)
+		}
+	})
+	t.Run("null_operand", func(t *testing.T) {
+		src := "if $x.status != null {\n  [notify] n\n}\n"
+		iff := mustParse(t, src, PromptMode).Statements[0].(*If)
+		if !iff.Right.IsNull || iff.Right.IsRef {
+			t.Errorf("right = %+v, want null", iff.Right)
+		}
+	})
+	t.Run("string_both_sides", func(t *testing.T) {
+		src := "if \"a\" == \"b\" {\n  [notify] n\n}\n"
+		iff := mustParse(t, src, PromptMode).Statements[0].(*If)
+		if iff.Left.IsRef || iff.Left.Text != "a" || iff.Right.Text != "b" {
+			t.Errorf("operands = %+v / %+v", iff.Left, iff.Right)
+		}
+	})
+	t.Run("empty_then_block", func(t *testing.T) {
+		src := "if $x == \"y\" {\n}\n"
+		iff := mustParse(t, src, PromptMode).Statements[0].(*If)
+		if len(iff.Then) != 0 {
+			t.Errorf("then = %d, want 0", len(iff.Then))
+		}
+	})
+	t.Run("nested_in_foreach", func(t *testing.T) {
+		src := "foreach $items {\n  if $item != null {\n    [notify] $item\n  }\n}\n"
+		fe := mustParse(t, src, PromptMode).Statements[0].(*Foreach)
+		if _, ok := fe.Body[0].(*If); !ok {
+			t.Fatalf("body[0] = %T, want *If", fe.Body[0])
+		}
+	})
+	t.Run("nested_if_in_then", func(t *testing.T) {
+		src := "if $a == \"1\" {\n  if $b == \"2\" {\n    [notify] deep\n  }\n}\n"
+		outer := mustParse(t, src, PromptMode).Statements[0].(*If)
+		if _, ok := outer.Then[0].(*If); !ok {
+			t.Fatalf("then[0] = %T, want *If", outer.Then[0])
+		}
+	})
+}
+
+func TestDottedRefs(t *testing.T) {
+	t.Run("R2-T05b_dotted_arg_is_one_ref", func(t *testing.T) {
+		d := firstDispatch(t, mustParse(t, "[echo] $x.campo\n", PromptMode))
+		if len(d.Args) != 1 || d.Args[0] != "$x.campo" {
+			t.Errorf("args = %q, want [$x.campo] (a dotted arg must be a single ref)", d.Args)
+		}
+	})
+	t.Run("R2-T05b_deep_dotted_arg", func(t *testing.T) {
+		d := firstDispatch(t, mustParse(t, "[echo] $x.a.b.c\n", PromptMode))
+		if len(d.Args) != 1 || d.Args[0] != "$x.a.b.c" {
+			t.Errorf("args = %q, want [$x.a.b.c]", d.Args)
+		}
+	})
+	t.Run("R2-T05b_dotted_arg_among_plain_args", func(t *testing.T) {
+		d := firstDispatch(t, mustParse(t, "[echo] one $x.f two\n", PromptMode))
+		want := []string{"one", "$x.f", "two"}
+		if len(d.Args) != len(want) {
+			t.Fatalf("args = %q, want %q", d.Args, want)
+		}
+		for i := range want {
+			if d.Args[i] != want[i] {
+				t.Errorf("args[%d] = %q, want %q", i, d.Args[i], want[i])
+			}
+		}
+	})
+	t.Run("R2-T05b_return_dotted_operand_is_one_ref", func(t *testing.T) {
+		d := firstDispatch(t, mustParse(t, "[return] --id=r $result.payload.out\n", PromptMode))
+		if d.ID != "r" {
+			t.Errorf("id = %q, want r", d.ID)
+		}
+		if len(d.Args) != 1 || d.Args[0] != "$result.payload.out" {
+			t.Errorf("args = %q, want [$result.payload.out] (must NOT split into two tokens)", d.Args)
+		}
+	})
+	t.Run("R2-T05b_foreach_dotted_list", func(t *testing.T) {
+		src := "foreach $r.items {\n  [seeker] $item\n}\n"
+		fe := mustParse(t, src, PromptMode).Statements[0].(*Foreach)
+		if fe.List != "r.items" {
+			t.Errorf("list = %q, want r.items", fe.List)
+		}
+		if len(fe.Body) != 1 {
+			t.Fatalf("body = %d stmts, want 1", len(fe.Body))
+		}
+	})
+	t.Run("R2-T05b_list_dotted_element", func(t *testing.T) {
+		lst := mustParse(t, "$l = list($x.a, \"b\", $y.p.q)\n", PromptMode).
+			Statements[0].(*Assign).Expr.(ListLit)
+		want := []string{"$x.a", "b", "$y.p.q"}
+		if len(lst.Elems) != len(want) {
+			t.Fatalf("elems = %q, want %q", lst.Elems, want)
+		}
+		for i := range want {
+			if lst.Elems[i] != want[i] {
+				t.Errorf("elems[%d] = %q, want %q", i, lst.Elems[i], want[i])
+			}
+		}
+	})
+	t.Run("R2-T05b_regression_plain_ref_arg", func(t *testing.T) {
+		d := firstDispatch(t, mustParse(t, "[echo] $x\n", PromptMode))
+		if len(d.Args) != 1 || d.Args[0] != "$x" {
+			t.Errorf("args = %q, want [$x]", d.Args)
+		}
+	})
+	t.Run("R2-T05b_regression_plain_foreach_list", func(t *testing.T) {
+		fe := mustParse(t, "foreach $items {\n  [seeker] $item\n}\n", PromptMode).
+			Statements[0].(*Foreach)
+		if fe.List != "items" {
+			t.Errorf("list = %q, want items", fe.List)
+		}
+	})
+	t.Run("R2-T05b_regression_dot_in_context_text_verbatim", func(t *testing.T) {
+		d := firstDispatch(t, mustParse(t, "[activity] a : uses $x.y verbatim\n", PromptMode))
+		if d.Context != "uses $x.y verbatim" {
+			t.Errorf("ctx = %q, want the dotted ref kept verbatim in context text", d.Context)
+		}
+	})
+	t.Run("R2-T05b_regression_if_operand_dotted", func(t *testing.T) {
+		iff := mustParse(t, "if $x.status == \"ok\" {\n  [notify] good\n}\n", PromptMode).
+			Statements[0].(*If)
+		if !iff.Left.IsRef || iff.Left.Text != "x.status" {
+			t.Errorf("left = %+v, want ref x.status", iff.Left)
+		}
+	})
+}
+
+func TestKeywordsAsFreeText(t *testing.T) {
+	t.Run("if_else_until_as_positional_args", func(t *testing.T) {
+		prog := mustParse(t, "[notify] if else until\n", PromptMode)
+		d := firstDispatch(t, prog)
+		want := []string{"if", "else", "until"}
+		if len(d.Args) != 3 {
+			t.Fatalf("args = %q, want %q", d.Args, want)
+		}
+		for i := range want {
+			if d.Args[i] != want[i] {
+				t.Errorf("args[%d] = %q, want %q", i, d.Args[i], want[i])
+			}
+		}
+	})
+	t.Run("keywords_inside_multiline_context", func(t *testing.T) {
+		src := "[activity] a :\n  if the build fails\n  else retry until green\n\n[notify] done\n"
+		prog := mustParse(t, src, PromptMode)
+		d := firstDispatch(t, prog)
+		if d.Context != "if the build fails\nelse retry until green" {
+			t.Errorf("ctx = %q", d.Context)
+		}
+		if len(prog.Statements) != 2 {
+			t.Fatalf("statements = %d, want 2", len(prog.Statements))
+		}
+	})
+}
+
+func TestIfDump(t *testing.T) {
+	src := "if $x.status == \"ok\" {\n  [notify] good\n}\nelse {\n  [notify] bad\n}\n"
+	prog := mustParse(t, src, PromptMode)
+	got := dumpProgram(prog)
+	want := "Program\n" +
+		"  If line=1 op=== left=$x.status right=\"ok\"\n" +
+		"    Then\n" +
+		"      Dispatch line=2 cmd=notify args=[\"good\"] id=\"\" ctx=\"\" flags={}\n" +
+		"    Else\n" +
+		"      Dispatch line=5 cmd=notify args=[\"bad\"] id=\"\" ctx=\"\" flags={}\n"
+	if got != want {
+		t.Errorf("dump mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
 func TestCommentsAndTemplates(t *testing.T) {
 	t.Run("U2-T9_comments_everywhere_strings_verbatim", func(t *testing.T) {
 		src := "// top comment\n" +

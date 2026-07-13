@@ -98,6 +98,9 @@ func collectReturns(stmts []Stmt, inLoop bool, out *[]retInfo) {
 			collectReturns(v.Body, true, out)
 		case *Loop:
 			collectReturns(v.Body, true, out)
+		case *If:
+			collectReturns(v.Then, inLoop, out)
+			collectReturns(v.Else, inLoop, out)
 		}
 	}
 }
@@ -177,8 +180,12 @@ func (p *parser) parseKeywordStmt(toks []token) (Stmt, *ParseError) {
 		return p.parseForeach(toks)
 	case "loop":
 		return p.parseLoop(toks)
-	case "if", "while":
+	case "if":
+		return p.parseIf(toks)
+	case "while":
 		return nil, errTrinary(t, t.text)
+	case "else":
+		return nil, errAt(t, Syntax, "else without a matching if")
 	case "success", "error", "info", "each":
 		return nil, errAt(t, Syntax, "%s handler without a preceding dispatch", t.text)
 	default:
@@ -194,18 +201,25 @@ func errTrinary(t token, form string) *ParseError {
 // parseDispatch parses a command atom (§2.1): args, flags and context.
 func (p *parser) parseDispatch(toks []token) (*Dispatch, *ParseError) {
 	d := &Dispatch{Command: toks[0].text, Line: toks[0].line}
-	for _, t := range toks[1:] {
+	for i := 1; i < len(toks); {
+		t := toks[i]
 		switch t.kind {
 		case tkIdent, tkString:
 			d.Args = append(d.Args, t.text)
+			i++
 		case tkBinding:
-			d.Args = append(d.Args, "$"+t.text)
+			var path string
+			path, i = refPath(toks, i)
+			d.Args = append(d.Args, "$"+path)
 		case tkFlag:
 			d.addFlag(t.text)
+			i++
 		case tkContext:
 			d.Context = t.text
+			i++
 		case tkContextOpen:
 			d.Context, p.pos = collectContext(p.lines, p.pos)
+			i++
 		default:
 			return nil, errAt(t, Syntax, "unexpected token in dispatch")
 		}
@@ -319,12 +333,14 @@ func parseList(toks []token) (Expr, *ParseError) {
 		switch toks[i].kind {
 		case tkString:
 			elems = append(elems, toks[i].text)
+			i++
 		case tkBinding:
-			elems = append(elems, "$"+toks[i].text)
+			var path string
+			path, i = refPath(toks, i)
+			elems = append(elems, "$"+path)
 		default:
 			return nil, errAt(toks[i], Syntax, "list elements must be string literals or $bindings")
 		}
-		i++
 		if i < len(toks) && toks[i].kind == tkComma {
 			i++
 		}
@@ -422,14 +438,18 @@ func (p *parser) parseEach(par *Parallel) *ParseError {
 
 // parseForeach parses "foreach $list { body }" (§6.6).
 func (p *parser) parseForeach(toks []token) (Stmt, *ParseError) {
-	if len(toks) != 3 || toks[1].kind != tkBinding || toks[2].kind != tkLBrace {
+	if len(toks) < 3 || toks[1].kind != tkBinding {
+		return nil, errAt(toks[0], Syntax, "foreach must be 'foreach $list {'")
+	}
+	path, next := refPath(toks, 1)
+	if next != len(toks)-1 || toks[next].kind != tkLBrace {
 		return nil, errAt(toks[0], Syntax, "foreach must be 'foreach $list {'")
 	}
 	body, err := p.parseBlock(toks[0].line, true)
 	if err != nil {
 		return nil, err
 	}
-	return &Foreach{List: toks[1].text, Body: body, Line: toks[0].line}, nil
+	return &Foreach{List: path, Body: body, Line: toks[0].line}, nil
 }
 
 // parseLoop parses "loop limit=N { body }"; non-integer or N ≤ 0 is a Type
@@ -451,4 +471,108 @@ func (p *parser) parseLoop(toks []token) (Stmt, *ParseError) {
 		return nil, err
 	}
 	return &Loop{Limit: n, Body: body, Line: toks[0].line}, nil
+}
+
+// parseIf parses "if Operand (==|!=) Operand {" plus its Then block and an
+// optional "else {" block (§8). Guards are deterministic: no compound
+// operators or arithmetic. Malformed guards are Syntax errors with the token's
+// line:column. The else block, when present, is on its own line.
+func (p *parser) parseIf(toks []token) (Stmt, *ParseError) {
+	opIdx := -1
+	for i := 1; i < len(toks); i++ {
+		if toks[i].kind == tkEq || toks[i].kind == tkNe {
+			opIdx = i
+			break
+		}
+	}
+	if opIdx < 0 {
+		return nil, errAt(toks[0], Syntax, "if condition requires '==' or '!='")
+	}
+	if toks[len(toks)-1].kind != tkLBrace {
+		return nil, errAt(toks[0], Syntax, "if condition must end with '{'")
+	}
+	left, err := parseOperand(toks[1:opIdx], toks[0])
+	if err != nil {
+		return nil, err
+	}
+	right, err := parseOperand(toks[opIdx+1:len(toks)-1], toks[opIdx])
+	if err != nil {
+		return nil, err
+	}
+	op := "=="
+	if toks[opIdx].kind == tkNe {
+		op = "!="
+	}
+	then, err := p.parseBlock(toks[0].line, true)
+	if err != nil {
+		return nil, err
+	}
+	els, err := p.parseElse()
+	if err != nil {
+		return nil, err
+	}
+	return &If{Left: left, Op: op, Right: right, Then: then, Else: els, Line: toks[0].line}, nil
+}
+
+// parseOperand builds an Operand from the tokens between keywords/operators:
+// a $ref path (binding plus optional dotted idents), a string literal, or
+// null (§8). Anything else is a Syntax error.
+func parseOperand(toks []token, at token) (Operand, *ParseError) {
+	if len(toks) == 0 {
+		return Operand{}, errAt(at, Syntax, "missing operand in if condition")
+	}
+	first := toks[0]
+	switch first.kind {
+	case tkString:
+		if len(toks) != 1 {
+			return Operand{}, errAt(toks[1], Syntax, "unexpected token after string operand")
+		}
+		return Operand{Text: first.text}, nil
+	case tkBinding:
+		path, next := refPath(toks, 0)
+		if next != len(toks) {
+			return Operand{}, errAt(toks[next], Syntax, "invalid reference path in if operand")
+		}
+		return Operand{IsRef: true, Text: path}, nil
+	case tkIdent:
+		if first.text == "null" && len(toks) == 1 {
+			return Operand{IsNull: true}, nil
+		}
+		return Operand{}, errAt(first, Syntax, "invalid operand %q; expected $ref, string or null", first.text)
+	default:
+		return Operand{}, errAt(first, Syntax, "invalid operand in if condition")
+	}
+}
+
+// refPath reconstructs a $ref path from the $binding token at toks[i] plus any
+// immediately following dotted-ident tokens. The lexer splits `$x.a.b` into
+// [$x, .a, .b] (it stops the binding at '.'), so every position that admits a
+// reference rejoins them into a single path ("x.a.b", without the $). It
+// returns the path and the index just past the last token consumed.
+func refPath(toks []token, i int) (string, int) {
+	path := toks[i].text
+	i++
+	for i < len(toks) && toks[i].kind == tkIdent && strings.HasPrefix(toks[i].text, ".") {
+		path += toks[i].text
+		i++
+	}
+	return path, i
+}
+
+// parseElse consumes and parses an "else {" block when the next content line
+// starts with the else keyword; otherwise it consumes nothing and returns nil.
+func (p *parser) parseElse() ([]Stmt, *ParseError) {
+	i := nextContent(p.lines, p.pos)
+	if i >= len(p.lines) || !isElseLine(p.lines[i]) {
+		return nil, nil
+	}
+	toks, err := lexLine(p.lines[i], i+1)
+	if err != nil {
+		return nil, err
+	}
+	p.pos = i + 1
+	if len(toks) != 2 || toks[1].kind != tkLBrace {
+		return nil, errAt(toks[0], Syntax, "else must be written as 'else {' on its own line")
+	}
+	return p.parseBlock(toks[0].line, true)
 }

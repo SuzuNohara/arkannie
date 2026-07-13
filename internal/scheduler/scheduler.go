@@ -223,7 +223,7 @@ func (s *Scheduler) execReturn(st *execState, d *ann.Dispatch) {
 	var val ram.Value
 	if strings.HasPrefix(op, "$") {
 		name := op[1:]
-		v, ok := st.ram.Get(name)
+		v, ok := st.ram.Resolve(name)
 		if !ok {
 			s.Notices = append(s.Notices, fmt.Sprintf("[class A] [return] $%s: unbound binding — skipped", name))
 			return
@@ -341,7 +341,7 @@ func (s *Scheduler) listValue(st *execState, l ann.ListLit) ram.Value {
 	items := make([]ram.Value, 0, len(l.Elems))
 	for _, e := range l.Elems {
 		if strings.HasPrefix(e, "$") {
-			if v, ok := st.ram.Get(e[1:]); ok {
+			if v, ok := st.ram.Resolve(e[1:]); ok {
 				items = append(items, v)
 				continue
 			}
@@ -387,7 +387,7 @@ func (s *Scheduler) assignDispatch(st *execState, name string, d *ann.Dispatch) 
 // execForeach iterates a list binding sequentially, binding $item (§6.6). A
 // non-list binding is a runtime type error → Class A notice + skip (§7.3).
 func (s *Scheduler) execForeach(st *execState, f *ann.Foreach) *Escalation {
-	v, ok := st.ram.Get(f.List)
+	v, ok := st.ram.Resolve(f.List)
 	if !ok || v.Kind != ram.KList {
 		s.Notices = append(s.Notices, fmt.Sprintf("[class A] foreach $%s: not a list binding — skipped", f.List))
 		return nil

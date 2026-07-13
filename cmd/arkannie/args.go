@@ -25,6 +25,7 @@ type parsedArgs struct {
 	mode           string   // --mode=<complete|fragment|layer>, requires --absorb
 	allowLayer     bool     // --allow-layer consent flag
 	allowLayerList []string // optional names from --allow-layer=<name,name>
+	check          bool     // --check parse-only flag (syntax check, no execution)
 	catalog        bool     // --catalog query flag
 	catalogAgent   string   // optional agent name from --catalog=<agent>
 	man            bool     // --man query flag
@@ -93,6 +94,25 @@ func checkComposition(p *parsedArgs) string {
 	if p.forgeName != "" && !forgeNameRe.MatchString(p.forgeName) {
 		return "--forge name must match ^[a-z][a-z0-9-]*$"
 	}
+	if msg := checkModeComposition(p); msg != "" {
+		return msg
+	}
+	return ""
+}
+
+// checkModeComposition enforces the parse-only --check rules: it needs a .ann
+// input and is mutually exclusive with the execution flags (agent/forge/detach/
+// interpret), since it neither dispatches nor writes any output.
+func checkModeComposition(p *parsedArgs) string {
+	if !p.check {
+		return ""
+	}
+	if p.agent != "" || p.forge || p.detach || p.interpret {
+		return "--check cannot be combined with --agent, --forge, --detach or --interpret"
+	}
+	if !strings.HasSuffix(p.input, ".ann") {
+		return "--check requires a .ann program file"
+	}
 	return ""
 }
 
@@ -115,6 +135,8 @@ func (p *parsedArgs) applyFlag(name, val string, hasEq bool, next string, hasNex
 		p.detach = true
 	case "interpret":
 		p.interpret = true
+	case "check":
+		p.check = true
 	case "forge":
 		return p.applyForge(val, hasEq)
 	case "allow-layer":

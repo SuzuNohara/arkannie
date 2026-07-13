@@ -66,7 +66,7 @@ func TestReturnRules(t *testing.T) {
 
 func TestUnsupportedConditionals(t *testing.T) {
 	for name, src := range map[string]string{
-		"U2-T11_bare_if":         "if $x {\n}\n",
+		"U2-T11_bare_while":      "while $x {\n}\n",
 		"U2-T11_bracketed_if":    "[if] $x\n",
 		"U2-T11_bracketed_while": "[while] $x\n",
 	} {
@@ -74,6 +74,32 @@ func TestUnsupportedConditionals(t *testing.T) {
 			err := mustFail(t, src, PromptMode, Syntax)
 			if !strings.Contains(err.Msg, "use trinary handlers") {
 				t.Errorf("msg = %q, want it to contain \"use trinary handlers\"", err.Msg)
+			}
+		})
+	}
+}
+
+func TestIfErrors(t *testing.T) {
+	cases := map[string]string{
+		"missing_operator":   "if $x {\n}\n",
+		"bad_left_operand":   "if foo == \"x\" {\n}\n",
+		"bad_right_operand":  "if $x == bar {\n}\n",
+		"comma_operand":      "if , == \"x\" {\n}\n",
+		"bad_ref_path":       "if $x foo == \"y\" {\n}\n",
+		"extra_after_string": "if \"a\" \"b\" == \"c\" {\n}\n",
+		"missing_left":       "if == \"x\" {\n}\n",
+		"missing_right":      "if $x == {\n}\n",
+		"no_open_brace":      "if $x == \"ok\"\n",
+		"else_without_brace": "if $x == \"ok\" {\n}\nelse\n",
+		"else_extra_tokens":  "if $x == \"ok\" {\n}\nelse foo {\n}\n",
+		"standalone_else":    "else {\n}\n",
+		"unclosed_then":      "if $x == \"ok\" {\n",
+	}
+	for name, src := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := mustFail(t, src, PromptMode, Syntax)
+			if err.Line < 1 || err.Col < 1 {
+				t.Errorf("position = %d:%d, want 1-based line:col", err.Line, err.Col)
 			}
 		})
 	}

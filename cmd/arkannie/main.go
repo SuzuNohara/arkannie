@@ -73,6 +73,9 @@ func (a *App) Run(argv []string) int {
 	if args.forge {
 		return a.runForge(args)
 	}
+	if args.check {
+		return a.runCheck(args)
+	}
 	if args.input == "" {
 		fmt.Fprintln(a.Stderr, "usage error: an input (prompt text or .ann path) is required")
 		return 64

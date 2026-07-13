@@ -105,6 +105,11 @@ func validateStmt(s Stmt, known func(string) bool) *ParseError {
 		return validateStmts(st.Body, known)
 	case *Loop:
 		return validateStmts(st.Body, known)
+	case *If:
+		if err := validateStmts(st.Then, known); err != nil {
+			return err
+		}
+		return validateStmts(st.Else, known)
 	}
 	return nil
 }

@@ -55,6 +55,9 @@ RUNNING
                       calling card, or just <agent> (value in the = form only)
     --man[=agent]     print the per-agent execution manual — full dispatch and
                       per-operation detail, or just <agent> (= form only)
+    --check <prog.ann>
+                      parse-check a program without running it (syntax only; no
+                      agents, no output file); exit 0 OK, 1 on a parse error
     validate [--agent=<name>]   check agent contracts under .agents/
     --version         print the arkannie version and exit
     --help, -h        print this tutorial

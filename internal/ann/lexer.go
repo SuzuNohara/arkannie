@@ -18,6 +18,8 @@ const (
 	tkLBrace                     // {
 	tkRBrace                     // }
 	tkAssign                     // =
+	tkEq                         // == (if operator, §8)
+	tkNe                         // != (if operator, §8)
 	tkComma                      // ,
 	tkRParen                     // )
 	tkListOpen                   // list(
@@ -77,6 +79,12 @@ func (lx *lineLexer) next() (token, bool, *ParseError) {
 	case strings.HasPrefix(lx.src[lx.pos:], "->"):
 		lx.pos += 2
 		return token{kind: tkArrow, line: lx.line, col: col}, false, nil
+	case strings.HasPrefix(lx.src[lx.pos:], "=="):
+		lx.pos += 2
+		return token{kind: tkEq, line: lx.line, col: col}, false, nil
+	case strings.HasPrefix(lx.src[lx.pos:], "!="):
+		lx.pos += 2
+		return token{kind: tkNe, line: lx.line, col: col}, false, nil
 	case strings.HasPrefix(lx.src[lx.pos:], "--"):
 		return lx.lexFlag(col)
 	case c == ':':
@@ -289,6 +297,16 @@ func isHandlerLine(raw string, names ...string) bool {
 		}
 	}
 	return false
+}
+
+// isElseLine reports whether the line's first word is the else keyword,
+// followed by end-of-word (space, tab or the opening brace).
+func isElseLine(raw string) bool {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(raw), "else")
+	if !ok {
+		return false
+	}
+	return rest == "" || rest[0] == ' ' || rest[0] == '\t' || rest[0] == '{'
 }
 
 func isIndented(raw string) bool {

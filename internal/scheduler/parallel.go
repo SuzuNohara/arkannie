@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,11 +13,20 @@ import (
 	"arkannie/internal/ann"
 	"arkannie/internal/dispatch"
 	"arkannie/internal/envelope"
+	"arkannie/internal/ram"
 	"arkannie/internal/registry"
 	"arkannie/internal/spawn"
 )
 
-var refToken = regexp.MustCompile(`\$[A-Za-z0-9_]+`)
+// refBase returns the base binding name of a (possibly dotted) reference path:
+// checkpoint reference tracking cares about the top-level binding, so `r.items`
+// registers a dependency on `r`.
+func refBase(path string) string {
+	if i := strings.IndexByte(path, '.'); i >= 0 {
+		return path[:i]
+	}
+	return path
+}
 
 // parResult carries one parallel dispatch outcome back from its goroutine.
 type parResult struct {
@@ -182,7 +190,7 @@ func walkRefs(stmt ann.Stmt, fn func(string)) {
 		}
 		walkAll(v.Each, fn)
 	case *ann.Foreach:
-		fn(v.List)
+		fn(refBase(v.List))
 		walkAll(v.Body, fn)
 	case *ann.Loop:
 		walkAll(v.Body, fn)
@@ -200,11 +208,11 @@ func walkAll(stmts []ann.Stmt, fn func(string)) {
 func dispatchRefs(d *ann.Dispatch, fn func(string)) {
 	for _, a := range d.Args {
 		if strings.HasPrefix(a, "$") {
-			fn(a[1:])
+			fn(refBase(a[1:]))
 		}
 	}
-	for _, m := range refToken.FindAllString(d.Context, -1) {
-		fn(m[1:])
+	for _, m := range ram.RefToken.FindAllString(d.Context, -1) {
+		fn(refBase(m[1:]))
 	}
 	for _, body := range d.Handlers {
 		walkAll(body, fn)
@@ -219,12 +227,12 @@ func exprRefs(e ann.Expr, fn func(string)) {
 	case ann.ListLit:
 		for _, el := range v.Elems {
 			if strings.HasPrefix(el, "$") {
-				fn(el[1:])
+				fn(refBase(el[1:]))
 			}
 		}
 	case ann.StrLit:
-		for _, m := range refToken.FindAllString(v.Value, -1) {
-			fn(m[1:])
+		for _, m := range ram.RefToken.FindAllString(v.Value, -1) {
+			fn(refBase(m[1:]))
 		}
 	}
 }

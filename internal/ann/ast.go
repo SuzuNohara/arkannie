@@ -11,7 +11,7 @@ import "strings"
 type Program struct{ Statements []Stmt }
 
 // Stmt is the sealed statement interface, implemented by *Dispatch,
-// *Assign, *Parallel, *Foreach and *Loop.
+// *Assign, *Parallel, *Foreach, *Loop and *If.
 type Stmt interface{ stmt() }
 
 // Expr is the sealed expression interface for binding right-hand sides,
@@ -69,6 +69,28 @@ type Loop struct {
 	Line  int
 }
 
+// Operand is one side of an If comparison (§8). It is exactly one of: a $ref
+// path (IsRef, Text holds the path without the $ prefix, e.g. "x.status"), the
+// null literal (IsNull), or a string literal (Text holds the verbatim value).
+type Operand struct {
+	IsRef  bool
+	IsNull bool
+	Text   string
+}
+
+// If is a deterministic conditional statement (§8): it runs Then when
+// Left Op Right holds and Else otherwise. Op is "==" or "!="; compound
+// operators and arithmetic are out of scope in Ann v0.2. Else is nil when no
+// else block is present.
+type If struct {
+	Left  Operand
+	Op    string
+	Right Operand
+	Then  []Stmt
+	Else  []Stmt
+	Line  int
+}
+
 // StrLit is a string literal expression. Template slots ({{ }}) and $refs
 // are kept verbatim — the parser never resolves templates (§2.5).
 type StrLit struct{ Value string }
@@ -106,6 +128,7 @@ func (*Assign) stmt()   {}
 func (*Parallel) stmt() {}
 func (*Foreach) stmt()  {}
 func (*Loop) stmt()     {}
+func (*If) stmt()       {}
 
 func (*Dispatch) expr() {}
 func (StrLit) expr()    {}

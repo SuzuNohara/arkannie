@@ -43,6 +43,33 @@ func dumpStmt(b *strings.Builder, s Stmt, depth int) {
 		writeIndent(b, depth)
 		fmt.Fprintf(b, "Loop line=%d limit=%d\n", st.Line, st.Limit)
 		dumpStmts(b, st.Body, depth+1)
+	case *If:
+		dumpIf(b, st, depth)
+	}
+}
+
+func dumpIf(b *strings.Builder, st *If, depth int) {
+	writeIndent(b, depth)
+	fmt.Fprintf(b, "If line=%d op=%s left=%s right=%s\n",
+		st.Line, st.Op, dumpOperand(st.Left), dumpOperand(st.Right))
+	writeIndent(b, depth+1)
+	b.WriteString("Then\n")
+	dumpStmts(b, st.Then, depth+2)
+	if st.Else != nil {
+		writeIndent(b, depth+1)
+		b.WriteString("Else\n")
+		dumpStmts(b, st.Else, depth+2)
+	}
+}
+
+func dumpOperand(o Operand) string {
+	switch {
+	case o.IsNull:
+		return "null"
+	case o.IsRef:
+		return "$" + o.Text
+	default:
+		return fmt.Sprintf("%q", o.Text)
 	}
 }
 

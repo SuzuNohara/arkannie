@@ -7,7 +7,6 @@ package dispatch
 import (
 	"bytes"
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -147,33 +146,68 @@ func BuildContextBlock(op *registry.Operation, opName string, d *ann.Dispatch, r
 	return marshalBlock(opName, text, d.Context != "", extras, effectiveFlags(op, opName, d), op.OutputSchema)
 }
 
-var bindingToken = regexp.MustCompile(`\$[A-Za-z0-9_]+`)
-
-// resolveBindings applies §9.3/§9.6 to the context text: KString bindings
-// are inlined; KList/KMap bindings become context.<name> fields and the
-// token is replaced by the bare name. An unset binding is Class B (§7.3).
+// resolveBindings applies §9.3/§9.6 to the context text using the single
+// canonical ram.RefToken matcher: a KString path is inlined; a KList/KMap path
+// becomes a context.<field> entry (keyed by the last dotted segment) and the
+// token is replaced by that bare name. Dotted paths (`$x.a.b`) resolve a field
+// over KMaps; an unresolvable path is Class B (§7.3), naming the base binding
+// and the failing segment.
 func resolveBindings(text string, r *ram.RAM) (string, map[string]*yaml.Node, error) {
 	extras := map[string]*yaml.Node{}
 	var firstErr error
-	resolved := bindingToken.ReplaceAllStringFunc(text, func(tok string) string {
-		name := tok[1:]
-		v, ok := r.Get(name)
+	resolved := ram.RefToken.ReplaceAllStringFunc(text, func(tok string) string {
+		v, ok := r.Resolve(tok[1:])
 		if !ok {
 			if firstErr == nil {
-				firstErr = classB("unresolvable binding %s in context_block render (§7.3)", tok)
+				firstErr = unresolvablePath(r, tok)
 			}
 			return tok
 		}
 		if v.Kind == ram.KString {
 			return v.Str
 		}
-		extras[name] = valueNode(v)
-		return name
+		key := lastSegment(tok[1:])
+		extras[key] = valueNode(v)
+		return key
 	})
 	if firstErr != nil {
 		return "", nil, firstErr
 	}
 	return resolved, extras, nil
+}
+
+// lastSegment returns the final dotted segment of a path — the field name that
+// keys a KList/KMap value inlined as a context field.
+func lastSegment(path string) string {
+	if i := strings.LastIndexByte(path, '.'); i >= 0 {
+		return path[i+1:]
+	}
+	return path
+}
+
+// unresolvablePath reconstructs why r.Resolve(tok[1:]) failed so the Class B
+// error names the base binding and the failing segment (§7.3). A path that
+// tries to descend into a non-map suggests separating the dot from the
+// reference — the dot was most likely meant as literal text.
+func unresolvablePath(r *ram.RAM, tok string) error {
+	segs := strings.Split(tok[1:], ".")
+	base := segs[0]
+	cur, ok := r.Get(base)
+	if !ok {
+		return classB("unresolvable binding %s in context_block render (§7.3)", tok)
+	}
+	for _, seg := range segs[1:] {
+		if cur.Kind != ram.KMap {
+			return classB("binding $%s in %s is not a map, so .%s cannot index it; "+
+				"if the dot is literal text, separate it from the reference (§7.3)", base, tok, seg)
+		}
+		next, ok := cur.Map[seg]
+		if !ok {
+			return classB("binding $%s has no field %q for path %s (§7.3)", base, seg, tok)
+		}
+		cur = next
+	}
+	return classB("unresolvable binding %s in context_block render (§7.3)", tok)
 }
 
 // checkFlags enforces §9.2 / agent-protocol §5.1 Type-3: every dispatch
