@@ -194,6 +194,18 @@ func walkRefs(stmt ann.Stmt, fn func(string)) {
 		walkAll(v.Body, fn)
 	case *ann.Loop:
 		walkAll(v.Body, fn)
+	case *ann.If:
+		operandRef(v.Left, fn)
+		operandRef(v.Right, fn)
+		walkAll(v.Then, fn)
+		walkAll(v.Else, fn)
+	}
+}
+
+// operandRef visits an if-guard operand's base binding when it is a $ref.
+func operandRef(op ann.Operand, fn func(string)) {
+	if op.IsRef {
+		fn(refBase(op.Text))
 	}
 }
 

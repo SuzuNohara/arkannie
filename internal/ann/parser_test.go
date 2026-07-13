@@ -304,6 +304,87 @@ func TestForeachLoop(t *testing.T) {
 	})
 }
 
+func TestLoopUntil(t *testing.T) {
+	t.Run("ref_dot_eq_string", func(t *testing.T) {
+		src := "loop limit=3 until $r.status == \"success\" {\n  [seeker] again\n}\n"
+		lp := mustParse(t, src, PromptMode).Statements[0].(*Loop)
+		if lp.Limit != 3 {
+			t.Errorf("limit = %d, want 3", lp.Limit)
+		}
+		if lp.Until == nil {
+			t.Fatal("until = nil, want a guard")
+		}
+		if !lp.Until.Left.IsRef || lp.Until.Left.Text != "r.status" {
+			t.Errorf("until.left = %+v, want ref r.status", lp.Until.Left)
+		}
+		if lp.Until.Op != "==" {
+			t.Errorf("until.op = %q, want ==", lp.Until.Op)
+		}
+		if lp.Until.Right.IsRef || lp.Until.Right.IsNull || lp.Until.Right.Text != "success" {
+			t.Errorf("until.right = %+v, want string success", lp.Until.Right)
+		}
+		if len(lp.Body) != 1 {
+			t.Fatalf("body = %d stmts, want 1", len(lp.Body))
+		}
+	})
+	t.Run("ne_operator", func(t *testing.T) {
+		src := "loop limit=2 until $x != \"done\" {\n  [seeker] a\n}\n"
+		lp := mustParse(t, src, PromptMode).Statements[0].(*Loop)
+		if lp.Until == nil || lp.Until.Op != "!=" {
+			t.Errorf("until = %+v, want op !=", lp.Until)
+		}
+	})
+	t.Run("null_operand", func(t *testing.T) {
+		src := "loop limit=5 until $r.result != null {\n  [seeker] a\n}\n"
+		lp := mustParse(t, src, PromptMode).Statements[0].(*Loop)
+		if lp.Until == nil || !lp.Until.Right.IsNull || lp.Until.Right.IsRef {
+			t.Errorf("until.right = %+v, want null", lp.Until)
+		}
+	})
+	t.Run("ref_without_dot", func(t *testing.T) {
+		src := "loop limit=2 until $x == \"y\" {\n  [seeker] a\n}\n"
+		lp := mustParse(t, src, PromptMode).Statements[0].(*Loop)
+		if lp.Until == nil || !lp.Until.Left.IsRef || lp.Until.Left.Text != "x" {
+			t.Errorf("until.left = %+v, want ref x", lp.Until)
+		}
+	})
+	t.Run("without_until_regression", func(t *testing.T) {
+		src := "loop limit=4 {\n  [seeker] again\n}\n"
+		lp := mustParse(t, src, PromptMode).Statements[0].(*Loop)
+		if lp.Limit != 4 {
+			t.Errorf("limit = %d, want 4", lp.Limit)
+		}
+		if lp.Until != nil {
+			t.Errorf("until = %+v, want nil (no until clause)", lp.Until)
+		}
+		if len(lp.Body) != 1 {
+			t.Fatalf("body = %d stmts, want 1", len(lp.Body))
+		}
+	})
+	t.Run("nested_in_foreach", func(t *testing.T) {
+		src := "foreach $items {\n  loop limit=2 until $item != null {\n    [seeker] $item\n  }\n}\n"
+		fe := mustParse(t, src, PromptMode).Statements[0].(*Foreach)
+		lp, ok := fe.Body[0].(*Loop)
+		if !ok {
+			t.Fatalf("body[0] = %T, want *Loop", fe.Body[0])
+		}
+		if lp.Until == nil || !lp.Until.Left.IsRef || lp.Until.Left.Text != "item" {
+			t.Errorf("until = %+v, want ref item != null", lp.Until)
+		}
+	})
+}
+
+func TestLoopUntilDump(t *testing.T) {
+	src := "loop limit=3 until $r.status == \"ok\" {\n  [notify] good\n}\n"
+	got := dumpProgram(mustParse(t, src, PromptMode))
+	want := "Program\n" +
+		"  Loop line=1 limit=3 until op=== left=$r.status right=\"ok\"\n" +
+		"    Dispatch line=2 cmd=notify args=[\"good\"] id=\"\" ctx=\"\" flags={}\n"
+	if got != want {
+		t.Errorf("dump mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
 func TestIfStatements(t *testing.T) {
 	t.Run("ref_dot_eq_string_then_only", func(t *testing.T) {
 		src := "if $x.status == \"ok\" {\n  [notify] good\n}\n"

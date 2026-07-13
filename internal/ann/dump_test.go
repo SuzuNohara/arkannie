@@ -41,7 +41,12 @@ func dumpStmt(b *strings.Builder, s Stmt, depth int) {
 		dumpStmts(b, st.Body, depth+1)
 	case *Loop:
 		writeIndent(b, depth)
-		fmt.Fprintf(b, "Loop line=%d limit=%d\n", st.Line, st.Limit)
+		fmt.Fprintf(b, "Loop line=%d limit=%d", st.Line, st.Limit)
+		if st.Until != nil {
+			fmt.Fprintf(b, " until op=%s left=%s right=%s",
+				st.Until.Op, dumpOperand(st.Until.Left), dumpOperand(st.Until.Right))
+		}
+		b.WriteString("\n")
 		dumpStmts(b, st.Body, depth+1)
 	case *If:
 		dumpIf(b, st, depth)

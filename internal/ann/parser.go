@@ -452,12 +452,15 @@ func (p *parser) parseForeach(toks []token) (Stmt, *ParseError) {
 	return &Foreach{List: path, Body: body, Line: toks[0].line}, nil
 }
 
-// parseLoop parses "loop limit=N { body }"; non-integer or N ≤ 0 is a Type
-// error, Class A (§6.7, §7.3).
+// parseLoop parses "loop limit=N [until Guard] { body }"; non-integer or
+// N ≤ 0 is a Type error, Class A (§6.7, §7.3). The optional until clause is a
+// post-condition guard between the limit and the '{' (§8); it is reserved only
+// in this header position (R7) — elsewhere "until" stays free text.
 func (p *parser) parseLoop(toks []token) (Stmt, *ParseError) {
-	if len(toks) != 5 || toks[1].kind != tkIdent || toks[1].text != "limit" ||
-		toks[2].kind != tkAssign || toks[3].kind != tkIdent || toks[4].kind != tkLBrace {
-		return nil, errAt(toks[0], Syntax, "loop must be 'loop limit=N {'")
+	if len(toks) < 5 || toks[1].kind != tkIdent || toks[1].text != "limit" ||
+		toks[2].kind != tkAssign || toks[3].kind != tkIdent ||
+		toks[len(toks)-1].kind != tkLBrace {
+		return nil, errAt(toks[0], Syntax, "loop must be 'loop limit=N [until <guard>] {'")
 	}
 	n, convErr := strconv.Atoi(toks[3].text)
 	if convErr != nil {
@@ -466,11 +469,35 @@ func (p *parser) parseLoop(toks []token) (Stmt, *ParseError) {
 	if n <= 0 {
 		return nil, errAt(toks[3], Type, "loop limit must be a positive integer, got %d", n)
 	}
+	until, err := parseLoopUntil(toks)
+	if err != nil {
+		return nil, err
+	}
 	body, err := p.parseBlock(toks[0].line, true)
 	if err != nil {
 		return nil, err
 	}
-	return &Loop{Limit: n, Body: body, Line: toks[0].line}, nil
+	return &Loop{Limit: n, Until: until, Body: body, Line: toks[0].line}, nil
+}
+
+// parseLoopUntil parses the optional "until Guard" clause sitting between the
+// limit and the trailing '{'. It returns nil when the clause is absent.
+func parseLoopUntil(toks []token) (*Guard, *ParseError) {
+	mid := toks[4 : len(toks)-1]
+	if len(mid) == 0 {
+		return nil, nil
+	}
+	if mid[0].kind != tkIdent || mid[0].text != "until" {
+		return nil, errAt(mid[0], Syntax, "loop header allows only 'until <guard>' before '{'")
+	}
+	if len(mid) == 1 {
+		return nil, errAt(mid[0], Syntax, "until requires a guard condition")
+	}
+	g, err := parseGuard(mid[1:], mid[0])
+	if err != nil {
+		return nil, err
+	}
+	return &g, nil
 }
 
 // parseIf parses "if Operand (==|!=) Operand {" plus its Then block and an
@@ -478,30 +505,12 @@ func (p *parser) parseLoop(toks []token) (Stmt, *ParseError) {
 // operators or arithmetic. Malformed guards are Syntax errors with the token's
 // line:column. The else block, when present, is on its own line.
 func (p *parser) parseIf(toks []token) (Stmt, *ParseError) {
-	opIdx := -1
-	for i := 1; i < len(toks); i++ {
-		if toks[i].kind == tkEq || toks[i].kind == tkNe {
-			opIdx = i
-			break
-		}
-	}
-	if opIdx < 0 {
-		return nil, errAt(toks[0], Syntax, "if condition requires '==' or '!='")
-	}
 	if toks[len(toks)-1].kind != tkLBrace {
 		return nil, errAt(toks[0], Syntax, "if condition must end with '{'")
 	}
-	left, err := parseOperand(toks[1:opIdx], toks[0])
+	g, err := parseGuard(toks[1:len(toks)-1], toks[0])
 	if err != nil {
 		return nil, err
-	}
-	right, err := parseOperand(toks[opIdx+1:len(toks)-1], toks[opIdx])
-	if err != nil {
-		return nil, err
-	}
-	op := "=="
-	if toks[opIdx].kind == tkNe {
-		op = "!="
 	}
 	then, err := p.parseBlock(toks[0].line, true)
 	if err != nil {
@@ -511,7 +520,37 @@ func (p *parser) parseIf(toks []token) (Stmt, *ParseError) {
 	if err != nil {
 		return nil, err
 	}
-	return &If{Left: left, Op: op, Right: right, Then: then, Else: els, Line: toks[0].line}, nil
+	return &If{Left: g.Left, Op: g.Op, Right: g.Right, Then: then, Else: els, Line: toks[0].line}, nil
+}
+
+// parseGuard parses a deterministic comparison `Operand (==|!=) Operand` from
+// the tokens between a header keyword and its '{'. It is shared by if
+// conditions and loop until post-conditions (§8). at anchors the position of
+// errors reported before the operator is found.
+func parseGuard(toks []token, at token) (Guard, *ParseError) {
+	opIdx := -1
+	for i := 0; i < len(toks); i++ {
+		if toks[i].kind == tkEq || toks[i].kind == tkNe {
+			opIdx = i
+			break
+		}
+	}
+	if opIdx < 0 {
+		return Guard{}, errAt(at, Syntax, "condition requires '==' or '!='")
+	}
+	left, err := parseOperand(toks[:opIdx], at)
+	if err != nil {
+		return Guard{}, err
+	}
+	right, err := parseOperand(toks[opIdx+1:], toks[opIdx])
+	if err != nil {
+		return Guard{}, err
+	}
+	op := "=="
+	if toks[opIdx].kind == tkNe {
+		op = "!="
+	}
+	return Guard{Left: left, Op: op, Right: right}, nil
 }
 
 // parseOperand builds an Operand from the tokens between keywords/operators:

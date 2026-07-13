@@ -161,6 +161,8 @@ func (s *Scheduler) execStmt(st *execState, stmt ann.Stmt) *Escalation {
 		return s.execForeach(st, v)
 	case *ann.Loop:
 		return s.execLoop(st, v)
+	case *ann.If:
+		return s.execIf(st, v)
 	default:
 		return nil
 	}
@@ -425,6 +427,82 @@ func (s *Scheduler) execLoop(st *execState, l *ann.Loop) *Escalation {
 		}
 	}
 	return nil
+}
+
+// guardVal is one operand of an if guard reduced to its comparable form:
+// exactly one of null, a scalar string, or a composite (map/list) kind. A
+// composite operand is not comparable and forces a Class A skip (§8).
+type guardVal struct {
+	isNull   bool
+	str      string
+	compound string // "" if null/scalar; else "map" or "list"
+}
+
+// execIf evaluates an if guard (§8) and runs the selected branch in its own
+// RAM scope (Push/Pop), so bindings created inside a branch die on exit and
+// the other branch never executes. A composite operand is a Class A notice
+// that skips the whole statement — no branch runs and the program continues.
+func (s *Scheduler) execIf(st *execState, ifs *ann.If) *Escalation {
+	result, skipKind := s.evalGuard(st, ifs)
+	if skipKind != "" {
+		s.Notices = append(s.Notices, fmt.Sprintf(
+			"[class A] if guard: operand resolved to a %s value, not comparable — statement skipped", skipKind))
+		return nil
+	}
+	branch := ifs.Then
+	if !result {
+		branch = ifs.Else
+	}
+	if len(branch) == 0 {
+		return nil
+	}
+	st.ram.Push()
+	defer st.ram.Pop()
+	return s.runStatements(st, branch, 0, false)
+}
+
+// evalGuard resolves both operands and applies the deterministic ==/!=
+// comparison. It returns the guard result and a skip kind: a non-empty kind
+// ("map"/"list") means a composite operand was found and the caller must skip
+// the statement. Null resolves for an irresolvable ref; null==null is true.
+func (s *Scheduler) evalGuard(st *execState, ifs *ann.If) (bool, string) {
+	l := resolveOperand(st.ram, ifs.Left)
+	r := resolveOperand(st.ram, ifs.Right)
+	if l.compound != "" {
+		return false, l.compound
+	}
+	if r.compound != "" {
+		return false, r.compound
+	}
+	eq := (l.isNull && r.isNull) || (!l.isNull && !r.isNull && l.str == r.str)
+	if ifs.Op == "!=" {
+		eq = !eq
+	}
+	return eq, ""
+}
+
+// resolveOperand reduces an operand to its guardVal: the null literal and an
+// irresolvable ref both become null; a ref to a string is that string; a ref
+// to a map/list is flagged composite; a string literal is its verbatim value.
+func resolveOperand(r *ram.RAM, op ann.Operand) guardVal {
+	if op.IsNull {
+		return guardVal{isNull: true}
+	}
+	if !op.IsRef {
+		return guardVal{str: op.Text}
+	}
+	v, ok := r.Resolve(op.Text)
+	if !ok {
+		return guardVal{isNull: true}
+	}
+	switch v.Kind {
+	case ram.KMap:
+		return guardVal{compound: "map"}
+	case ram.KList:
+		return guardVal{compound: "list"}
+	default:
+		return guardVal{str: v.Str}
+	}
 }
 
 // maybeCheckpoint writes a RAM snapshot before a top-level dispatch whose

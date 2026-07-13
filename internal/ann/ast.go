@@ -62,11 +62,23 @@ type Foreach struct {
 	Line int
 }
 
-// Loop executes Body up to Limit times (§2.4, §6.7).
+// Loop executes Body up to Limit times (§2.4, §6.7). Until, when non-nil,
+// is a post-condition guard: iteration stops early once it holds (§8). The
+// guard is parsed here; its evaluation belongs to a later execution stage.
 type Loop struct {
 	Limit int
+	Until *Guard
 	Body  []Stmt
 	Line  int
+}
+
+// Guard is a deterministic comparison `Left Op Right` shared by If conditions
+// and loop `until` post-conditions (§8). Op is "==" or "!="; compound
+// operators and arithmetic are out of scope in Ann v0.2.
+type Guard struct {
+	Left  Operand
+	Op    string
+	Right Operand
 }
 
 // Operand is one side of an If comparison (§8). It is exactly one of: a $ref

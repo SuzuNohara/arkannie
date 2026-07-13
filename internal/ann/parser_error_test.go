@@ -105,6 +105,27 @@ func TestIfErrors(t *testing.T) {
 	}
 }
 
+func TestLoopUntilErrors(t *testing.T) {
+	cases := map[string]string{
+		"missing_guard":       "loop limit=2 until {\n}\n",
+		"guard_no_operator":   "loop limit=2 until $x {\n}\n",
+		"bad_left_operand":    "loop limit=2 until foo == \"x\" {\n}\n",
+		"bad_right_operand":   "loop limit=2 until $x == bar {\n}\n",
+		"no_open_brace":       "loop limit=2 until $x == \"ok\"\n",
+		"junk_before_brace":   "loop limit=2 foo $x == \"y\" {\n}\n",
+		"standalone_until":    "until $x == \"y\" {\n}\n",
+		"until_missing_right": "loop limit=2 until $x == {\n}\n",
+	}
+	for name, src := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := mustFail(t, src, PromptMode, Syntax)
+			if err.Line < 1 || err.Col < 1 {
+				t.Errorf("position = %d:%d, want 1-based line:col", err.Line, err.Col)
+			}
+		})
+	}
+}
+
 func TestParallelIDErrors(t *testing.T) {
 	t.Run("U2-T12_missing_id", func(t *testing.T) {
 		src := "parallel {\n  [seeker] --id=a one\n  [reviewer] two\n}\n"
