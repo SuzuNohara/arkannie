@@ -1,229 +1,255 @@
-# Ann Language Specification v0.1
+# Especificación del lenguaje Ann v0.2
 
-## Document Authority
+## Autoridad del documento
 
-This file is the normative Ann interpreter specification. It overrides any description of Ann syntax, semantics, or runtime behavior in any other file, including PLAN.md and arkannie.md. When in doubt, this file wins.
+Este archivo es la especificación **normativa y nativa** del lenguaje Ann tal como lo
+implementa el runtime `arkannie` (binario Go). Describe el comportamiento **ya
+implementado y probado**: el código de `internal/ann`, `internal/ram`,
+`internal/dispatch`, `internal/scheduler` y `cmd/arkannie`, junto con sus tests, es la
+fuente de verdad. Ante cualquier duda de semántica, el test correspondiente decide (ver
+el apéndice de trazabilidad al final). Este documento prevalece sobre cualquier otra
+descripción de sintaxis o semántica de Ann en el repositorio, con una excepción: la
+mecánica del sobre de retorno (envelope), los timeouts y la herencia de grants viven en
+`agent-protocol.md`, que es normativo para esos temas; aquí solo se referencian.
+
+Ann es un **lenguaje de despacho**, no un lenguaje de propósito general. Un programa Ann
+orquesta agentes wave (cada uno un proceso `claude` aislado), pasa resultados por
+bindings de RAM y decide explícitamente qué va a la salida. Su gramática es
+deliberadamente pequeña.
 
 ---
 
-## Purpose
+## Preámbulo — no-objetivos (léase primero)
 
-Ann is the command language for Arkannie. It provides a minimal, structured syntax for orchestrating wave agents, managing RAM bindings, and expressing control flow. Ann is not a general-purpose language — it is a dispatch language. Its grammar is intentionally small.
+Esta versión especifica **únicamente** lo que el runtime hace hoy. Las siguientes
+capacidades **no** son parte de Ann v0.2 y **no deben** inferirse de este documento; son
+material de v0.3 o posterior:
+
+- **Sin operadores compuestos en guardas.** Las guardas de `if` y de `loop ... until`
+  admiten **solo** `==` y `!=`. No existen `&&`, `||`, negación, paréntesis ni
+  aritmética. Una sola comparación por guarda.
+- **Comparación solo de strings y `null`.** Un operando que resuelve a un valor
+  compuesto (mapa o lista) **no es comparable**: la guarda se trata como no evaluable
+  (Class A, ver §6.9 y §6.7). No hay comparación estructural, numérica ni de longitud.
+- **Los juicios semánticos pertenecen a los agentes.** El runtime no interpreta el
+  contenido de un payload ni "entiende" texto: compara valores literales. Cualquier
+  decisión que requiera comprender lenguaje natural debe delegarse a un agente wave, que
+  devuelve un campo escalar sobre el que la guarda pueda comparar.
+- **Determinismo no negociable.** La clasificación de comandos, la resolución de
+  bindings, la evaluación de guardas y el ruteo de handlers son deterministas y sin
+  estado oculto. Ninguna construcción de v0.2 introduce no-determinismo.
+- **Fuera de alcance en v0.2** (reservado a v0.3): fan-out dinámico (paralelismo cuyo
+  ancho depende de datos en runtime), composición/anidamiento de bloques de control,
+  reintento declarativo más allá del patrón `loop ... until`, construcción de datos
+  estructurados dentro de Ann (más allá de `list()`), y un sistema formal de comillas o
+  escapes. Las plantillas `{{ ... }}` dentro del texto de usuario tampoco se resuelven
+  (ver §5).
 
 ---
 
-## Level Architecture
+## Arquitectura de niveles
 
-Three levels. Each is a contract, not a description.
+Tres niveles. Cada uno es un contrato, no una descripción.
 
-| Level | Identity | Lifecycle | Protocol surface |
+| Nivel | Identidad | Ciclo de vida | Superficie de protocolo |
 |---|---|---|---|
-| **Level 1 — Arkannie** | Runtime. Interprets Ann. Sole caller of `Agent()`. | Permanent — exists for the full session | None — Arkannie is never the recipient of a protocol envelope |
-| **Level 2 — Wave agents** | Ephemeral agents dispatched via `Agent()`. Defined by `[agent].md` + `[agent].annspec.md`. | Spawned per dispatch, destroyed on return | Returns exactly one envelope `{ id, status, payload }` |
-| **Level 3 — Sub-agents** | Anonymous workers constructed inline by Level 2. No files. | Spawned inside a wave, invisible to Arkannie | Returns payload to parent Level 2 only |
+| **Nivel 1 — arkannie** | El runtime. Binario Go que compila e interpreta Ann de forma determinista. Único invocador de agentes. | Permanente durante toda la ejecución del programa. | Ninguna — arkannie nunca es receptor de un envelope. |
+| **Nivel 2 — agentes wave** | Agentes efímeros despachados como procesos `claude -p` aislados. Definidos por `.agents/<nombre>/agent.yaml` + `harness.md`. | Se spawnean por despacho, se destruyen al retornar. | Devuelven exactamente un envelope `{ id, status, payload }` (ver `agent-protocol.md`). |
+| **Nivel 3 — sub-agentes** | Trabajadores anónimos construidos en línea por un Nivel 2. Sin archivos. | Se spawnean dentro de un wave, invisibles a arkannie. | Devuelven su payload solo al Nivel 2 padre. |
 
-**Invariant:** Level 1 is Arkannie. Level 2 is a wave. Level 3 is a sub-worker. These are not roles — they are structural positions. An agent cannot change levels during a session.
+**Invariante:** Nivel 1 es arkannie, Nivel 2 es un wave, Nivel 3 es un sub-trabajador.
+No son roles, son posiciones estructurales; un agente no cambia de nivel durante una
+ejecución.
+
+La superficie de ejecución es **batch**: se invoca con `arkannie ... programa.ann` o
+`arkannie --agent <nombre> ... "prompt"`. La única superficie conversacional vive en
+`--forge` (forja de agentes) y en `--interpret` (reparación de un programa ante error de
+parseo). No hay modo interactivo persistente.
 
 ---
 
-## §1 Lexical Structure
+## §1 Estructura léxica
 
-### §1.0 Version Header
+### §1.0 Cabecera de versión
 
-Ann programs (`.ann` files) must begin with:
-
-```
-# ann v0.1
-```
-
-The `#` must be the first character of the file (column 0). Any mismatch is a hard parse error. In interactive mode, the version header is not required and is silently ignored if present.
-
-### §1.1 Comments
+Todo programa Ann (`.ann`) **debe** comenzar con la cabecera, en la primera línea no
+comentario:
 
 ```
-// this is a comment
+# ann v0.2
 ```
 
-`//` comments are line-only. Block comments are not supported. Comments may appear anywhere a newline is valid.
+El `#` **debe** ser el primer carácter de la línea (columna 0). Un valor distinto de
+`# ann v0.2` es un error de parseo de categoría *Version mismatch* (Class B). En modo
+prompt (interactivo contra un solo agente) la cabecera es opcional y se ignora si está
+presente.
 
-### §1.2 Reserved Symbols
+### §1.1 Comentarios
 
-| Symbol | Role |
+```
+// esto es un comentario
+```
+
+Los comentarios `//` son de línea únicamente. No hay comentarios de bloque. Pueden
+aparecer en cualquier posición donde sea válido un salto de línea.
+
+### §1.2 Símbolos reservados
+
+| Símbolo | Rol |
 |---|---|
-| `[name]` | Command token |
-| `{{ key }}` | Template slot — replaced at render time |
-| `$name` | RAM binding reference |
-| `->` | Handler arrow |
-| `{}` | Block delimiter |
-| `//` | Comment marker |
-| `#` | Version header marker (line 1 only) |
-| `--` | Flag prefix |
+| `[nombre]` | Token de comando |
+| `{{ clave }}` | Slot de plantilla — resuelto solo al renderizar el `harness.md` (ver §5) |
+| `$nombre` | Referencia a un binding de RAM; admite acceso por punto `$nombre.seg` (ver §2.8) |
+| `->` | Flecha de handler |
+| `{}` | Delimitadores de bloque |
+| `//` | Marcador de comentario |
+| `#` | Marcador de cabecera de versión (solo línea 1) |
+| `--` | Prefijo de flag |
+| `==` `!=` | Operadores de comparación de guarda (ver §6.7, §6.9) |
+| `:` | Separador del bloque de contexto (ver §2.7) |
 
-### §1.3 Language Keywords
+### §1.3 Palabras clave del lenguaje
 
-The following tokens are reserved and have fixed semantics in the Ann grammar. They cannot be used as binding names.
+Los siguientes tokens tienen semántica fija en la gramática de Ann. **No pueden** usarse
+como nombre de binding:
 
 ```
 parallel  foreach  loop  success  error  info  each  limit
-ask-user  notify  clarify  null
+ask-user  notify  clarify  null  return
 ```
+
+Además, la gramática recontextualiza estructuralmente estas palabras:
+
+- `if` y `else` introducen el condicional determinista (§6.9). Un `[if]` con corchetes o
+  un `while`/`[while]` son formas **rechazadas** con error de sintaxis (usar `if` o
+  `loop`, respectivamente).
+- `until` es palabra reservada **solo** en la posición de cabecera de un `loop`
+  (`loop limit=N until <guarda> {`, ver §6.7). En cualquier otra posición `until` es
+  texto libre.
 
 ---
 
-## §2 Token Grammar
+## §2 Gramática de tokens
 
-### §2.1 Command Atom
-
-```
-[command] arg1 arg2 --flag1 --flag2=value
-```
-
-- Command name is `[word]` — alphanumeric plus `-`, no spaces inside brackets
-- Arguments are positional strings (no quoting required for single-word values)
-- Flags are prefixed with `--`; boolean flags have no value; valued flags use `=`
-- A command atom on its own line is a complete statement
-- A command atom followed by `->` handlers is a dispatch with result routing
-
-### §2.2 Trinary Handlers
-
-Every wave dispatch may optionally be followed by trinary handlers:
+### §2.1 Átomo de comando
 
 ```
-[command] args
+[comando] arg1 arg2 --flag1 --flag2=valor
+```
+
+- El nombre del comando es `[palabra]` — alfanumérico más `-`, sin espacios dentro de los
+  corchetes.
+- Los argumentos son strings posicionales (sin comillas para valores de una palabra).
+- Los flags llevan prefijo `--`; los flags booleanos no tienen valor, los flags con valor
+  usan `=`.
+- Un átomo de comando en su propia línea es un statement completo.
+- Un átomo de comando seguido de handlers `->` es un despacho con ruteo de resultado.
+
+### §2.2 Handlers trinarios
+
+Todo despacho a un wave puede ir seguido, opcionalmente, de handlers trinarios:
+
+```
+[comando] args
   success -> { ... }
   error   -> { ... }
   info    -> { ... }
 ```
 
-- All three handlers are optional
-- Handlers execute when the wave returns with the matching `status`
-- If a handler is absent and the wave returns that status: `success` with no handler → output discarded silently; `error` with no handler → Class B escalation; `info` with no handler → output discarded silently **unless** `payload.missing_field` is present (Ask Protocol — see §2.7.1), in which case Arkannie always surfaces the message regardless of handler presence
-- Handler bodies are Ann blocks — they may contain bindings, commands, and control flow
-- Handlers execute in the scope of the enclosing block (see §4)
+- Los tres handlers son opcionales.
+- Un handler se ejecuta cuando el wave retorna con el `status` que coincide.
+- Dentro de un handler, `$result` expone `{ id, status, payload }` del wave.
+- Si un handler está ausente y el wave retorna ese status:
+  - `success` sin handler → el payload **no** se vuelca a la salida; queda solo en RAM.
+  - `error` sin handler → escalación Class B (ver §7).
+  - `info` sin handler → se descarta, **salvo** que `payload.missing_field` esté presente
+    (Ask Protocol, §2.7.1), en cuyo caso arkannie siempre surface el mensaje.
+- Los cuerpos de handler son bloques Ann; se ejecutan en un scope propio con `$result`
+  ligado (ver §4).
 
-### §2.3 Binding Assignment
+El sobre de retorno, su validación estructural y el ruteo por `status` están normados en
+`agent-protocol.md §1–§2`; aquí no se re-especifican.
 
-```
-$name = [command] args
-$name = "literal string"
-$name = list("a", "b", "c")
-```
-
-- Bindings are RAM-local (see §4.3)
-- Left side is `$identifier` — alphanumeric plus `_`, no `-`
-- Right side is a command atom, a string literal, or a `list()` constructor
-- A binding assignment does not produce output; the result is stored in RAM only
-- If the command returns `error`, the binding is not set and error escalation applies
-
-### §2.4 Control Flow Constructs
-
-**parallel block:**
+### §2.3 Asignación de binding
 
 ```
-parallel {
-  [command-a] --id=a args
-  [command-b] --id=b args
-}
-  each -> { ... }
+$nombre = [comando] args
+$nombre = "cadena literal"
+$nombre = list("a", "b", "c")
 ```
 
-- `--id` is required on every dispatch inside `parallel {}` (see §6.1)
-- Dispatches run concurrently; Arkannie waits for all before processing `each`
-- `each` handler receives one result at a time, in completion order
+- Los bindings son locales a RAM (ver §4).
+- El lado izquierdo es `$identificador` — alfanumérico más `_`, sin `-`; no puede ser una
+  palabra reservada de §1.3.
+- El lado derecho es un átomo de comando, un literal de string o un constructor `list()`.
+- Una asignación no produce salida; el resultado se guarda solo en RAM.
+- Si el comando retorna `error`, el binding **no** se liga y aplican las reglas de
+  escalación de error. Si el comando retorna `success`, el binding recibe el `payload`.
 
-**foreach:**
+### §2.4 Panorama de control de flujo
 
-```
-foreach $list {
-  [command] $item
-}
-```
+Las construcciones de control se detallan en §6. Formas admitidas:
 
-- Iterates over a `list()` binding
-- `$item` is bound to the current element inside the block
-- Dispatches are sequential, not concurrent
+- `parallel { ... } [each -> { ... }]` — despacho concurrente (§6.1–§6.5, §6.8).
+- `foreach $lista { ... }` — iteración secuencial (§6.6).
+- `loop limit=N [until <guarda>] { ... }` — repetición acotada con post-condición
+  opcional (§6.7).
+- `if <guarda> { ... } [else { ... }]` — condicional determinista (§6.9).
 
-**loop:**
-
-```
-loop limit=N {
-  [command] args
-  // break condition expressed via success -> {} with explicit stop
-}
-```
-
-- Executes the block up to N times
-- N must be a positive integer; N < 1 is a Class A error
-- No implicit break — use `success -> {}` handler with no recursive call to stop
-
-### §2.5 Interpolated String
+### §2.5 String interpolado
 
 ```
-"text with {{ slot }} and $binding references"
+"texto con referencias $binding y $binding.campo"
 ```
 
-- `{{ slot }}` — resolved from context_block at render time (see §5)
-- `$binding` — resolved from RAM at execution time
-- Both may coexist in a single string
+- `$binding` — resuelto desde RAM en tiempo de ejecución (§2.8).
+- Los slots `{{ clave }}` que aparezcan dentro del texto de usuario **no** se resuelven en
+  v0.2: se transportan verbatim (ver §5). La única sustitución dentro de texto de usuario
+  es `$ref`/acceso por punto.
 
-### §2.6 list() Constructor
+### §2.6 Constructor `list()`
 
 ```
 $items = list("alpha", "beta", "gamma")
 $items = list($a, $b, $c)
 ```
 
-- Creates a typed list binding
-- Elements are strings or RAM references
-- Lists are immutable after creation
+- Crea un binding de tipo lista.
+- Los elementos son literales de string o referencias `$ref` (incluidas rutas con punto,
+  ver §2.8).
+- Un `$ref` de elemento que no resuelve se sustituye por un elemento string vacío (no
+  escala).
+- Las listas son inmutables tras su creación.
 
-### §2.7 Context Block
+### §2.7 Bloque de contexto
 
-A command atom may be followed by a context block — free-form text that the
-wave agent or native command interprets to extract the information it needs.
+Un átomo de comando puede ir seguido de un bloque de contexto: texto libre que el agente
+wave interpreta para extraer la información que necesita.
 
 ```
-[command] arg1 --flag1 : context text goes here
+[comando] arg1 --flag1 : el texto de contexto va aquí
 ```
 
-The `:` (colon + space) separates the structured header from the context block.
+El `: ` (dos puntos + espacio) separa la cabecera estructurada del bloque de contexto.
 
-**Syntax rules:**
+- **Una línea:** el contexto termina al fin de línea.
+- **Multilínea:** el contexto continúa en las líneas indentadas siguientes hasta una línea
+  en blanco o un token de handler `->`.
+- **Sin contexto:** las operaciones que no lo necesitan omiten el `:` por completo.
 
-- Single-line: context ends at end of line
-  ```
-  [activity] act-001 --new --priority=high : refactorizar el middleware de auth, tipo simple
-  ```
-- Multi-line: context continues on subsequent indented lines until a blank line
-  or a `->` handler token is encountered
-  ```
-  [activity] act-001 --new --priority=high :
-    Refactorizar el middleware de auth.
-    Separar token validation de session handling.
-    Tipo simple. Ticket FEAT-89.
-  ```
-- No context: operations that don't need it omit the `:` entirely
-  ```
-  [activity] --active
-  ```
+**Mapeo al `context_block`:** arkannie coloca el texto en `context_block.context.text` y
+resuelve antes del despacho los `$ref` que contenga (§2.8). arkannie no parsea ni valida
+el contenido del texto — eso es responsabilidad del agente. El `context_block` canónico se
+detalla en §9.
 
-**Mapping to context_block:**
+**Responsabilidad de extracción del agente:** el wave recibe `context.text` y debe extraer
+los campos que necesita. Si un campo requerido no puede determinarse, el agente devuelve
+`status: info` con una pregunta (§2.7.1) en lugar de proceder con datos faltantes.
 
-Arkannie passes the full context text as `context_block.context.text` (plain string).
-The positional argument and flags are resolved before dispatch as usual.
-Arkannie does not parse or validate the context text — that is the agent's responsibility.
+### §2.7.1 Ask Protocol del agente
 
-**Agent extraction responsibility:**
-
-The wave agent receives `context.text` and must extract the structured fields it
-needs to execute the operation. If a required field cannot be determined from the
-text, the agent must return `status: info` with a question (see §2.7.1) rather
-than proceeding with missing data or failing silently.
-
-### §2.7.1 Agent Ask Protocol
-
-When a wave agent cannot determine a required field from `context.text`, it returns
-`status: info` with a question instead of `status: error`:
+Cuando un wave no puede determinar un campo requerido, retorna `status: info` con una
+pregunta en vez de `status: error`:
 
 ```yaml
 id: "..."
@@ -234,397 +260,498 @@ payload:
   resumable: true
 ```
 
-**Arkannie behavior on `info` with `missing_field`:**
-Arkannie always surfaces the `message` to the developer — it does NOT discard it
-silently (exception to the default `info` discard rule in §2.2).
-Arkannie waits. The developer re-issues the command with the missing information
-added to the context block. Arkannie re-dispatches. No automatic re-dispatch in v0.1.
+**Comportamiento de arkannie ante `info` con `missing_field`:** arkannie siempre surface el
+`message` al desarrollador — no lo descarta en silencio (excepción a la regla de descarte
+de `info` de §2.2) — y marca el status del programa como `info`. El desarrollador
+re-emite el comando con la información añadida al contexto y arkannie re-despacha. No hay
+re-despacho automático en v0.2.
 
-**`resumable: true`** signals that the agent expects to be re-dispatched with
-more context. `resumable: false` (or absent) means the agent gave up — treat
-as a terminal info, no re-dispatch expected.
+`resumable: true` indica que el agente espera ser re-despachado; `resumable: false` (o
+ausente) significa que el agente se rindió: `info` terminal, sin re-despacho esperado.
+
+### §2.8 Referencias con acceso por punto
+
+**Gramática:**
+
+```
+$nombre(.segmento)*
+```
+
+`nombre` y cada `segmento` son `[A-Za-z0-9_]+`. `$x` es la forma sin punto; `$x.a.b` es
+una ruta de acceso por punto. El token canónico es
+`\$[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*` (definido una sola vez en `ram.RefToken` y
+consumido en todos los sitios). El lexer parte `$x.a.b` en `[$x, .a, .b]` y cada sitio que
+admite referencia los vuelve a unir en una sola ruta.
+
+**Semántica de `Resolve` sobre KMap:** el primer segmento se resuelve como una lectura de
+binding normal (recorriendo scopes de adentro hacia afuera, §4). Cada segmento adicional
+indexa dentro de un valor de tipo mapa (KMap) por su clave. Si un paso intermedio no es un
+mapa, o la clave no existe, la ruta **no resuelve**. La forma sin punto es exactamente una
+lectura de binding.
+
+**Sitios donde se preserva la ruta con punto:** argumentos de despacho (incluido
+`[return]`), lista de `foreach`, elementos de `list()`, operandos de guarda (`if` /
+`loop ... until`) y texto de contexto interpolado.
+
+**Resolución dependiente de la posición** (esto es normativo):
+
+- **En interpolación** (texto de contexto y `$ref` dentro de texto): un `$x.campo`
+  interpola el **valor** del campo, no el mapa completo ni el token literal. Una ruta
+  profunda camina mapas anidados. Un `$ref` **sin punto** a un mapa/lista se agrega como
+  campo `context.<último-segmento>`; un `$ref` a un string se inlinea como valor. Una ruta
+  que **no resuelve** en esta posición es **Class B** antes del despacho: el error nombra
+  el binding base y el segmento que falló. Si la ruta intenta descender en un valor que no
+  es mapa, el error **sugiere separar el punto de la referencia** (el punto probablemente
+  era texto literal).
+- **En guardas** (`if` / `until`): un `$ref` (con o sin punto) que **no resuelve** vale
+  `null`. Un `$ref` que resuelve a un valor compuesto (mapa o lista) hace la guarda **no
+  comparable** → Class A (§6.9, §6.7).
+- **En `[return]`:** resuelve el valor (campo o binding completo); un binding no ligado es
+  un aviso Class A y se salta el `[return]` (ver §6.9 no aplica — ver la definición de
+  `[return]` en §2.9).
+- **En `foreach`:** la ruta debe resolver a una lista; en caso contrario, aviso Class A y
+  se salta el `foreach`.
+
+### §2.9 Palabras clave nativas
+
+Cuatro comandos están compilados en el binario y el runtime los ejecuta directamente sin
+despachar un wave:
+
+- `[ask-user] <texto>` — surface una pregunta; la ejecución se detiene con status `info`.
+- `[notify] <texto>` — añade una nota a la sección *Notices* del reporte.
+- `[clarify] <texto>` — igual que `notify`, para aclaraciones.
+- `[return] <operando>` — emite un bloque de salida (el indicador de salida, ver abajo).
+
+**`[return]` — indicador de salida (normativo).** El programa decide qué aparece en la
+salida. Los payloads de `success` **no** se vuelcan automáticamente: hay que ligarlos y
+emitirlos explícitamente con `[return]`.
+
+```
+[return] $summary               // return único: sin encabezado, solo el contenido
+[return] --id=result $summary   // sección titulada "## result"
+[return] "una nota fija"        // literal de string, verbatim
+```
+
+Reglas del operando:
+
+- Un `[return]` toma **un** operando: un `$binding` (resuelto por `Resolve`, admite punto)
+  o un literal de string.
+- Un binding que resuelve a mapa o lista se renderiza como bloque YAML; un string se
+  renderiza verbatim.
+- Un binding no ligado es un aviso Class A y se salta ese `[return]`. Un `[return]` sin
+  operando es un aviso Class A y se salta.
+- Un programa sin ningún `[return]` produce un cuerpo de salida vacío.
+
+Reglas de etiqueta de sección, verificadas en tiempo de parseo (violarlas es error de
+compilación):
+
+- El `--id` de `[return]` es la **etiqueta de sección** de la salida (distinta del `--id`
+  de CLI que nombra el archivo de salida).
+- Un único `[return]` puede omitir `--id`: su sección no lleva encabezado.
+- Con dos o más `[return]`, **cada uno** debe llevar `--id`.
+- Todos los valores de `--id` deben ser únicos.
+- Un `[return]` dentro de un `foreach`/`loop`/`each` requiere `--id`; cada corrida emite su
+  propia sección numerada (`--id-1`, `--id-2`, …).
 
 ---
 
-## §3 Instruction Classifier
+## §3 Clasificador de instrucciones
 
-Classification is deterministic. Arkannie checks in order and takes the first match.
+La clasificación es determinista. Para cada statement, arkannie decide en este orden y
+toma la primera coincidencia:
 
 ```
-1. Extract [command] token from the input
-2. If .arkannie/[command].annspec.md exists  → wave command  → dispatch via Agent()
-3. Else if .arkannie/[command].md exists     → native command → execute with Arkannie's tools
-4. Else if token is ask-user, notify, clarify → native keyword → handle directly
-5. Else if token is parallel, foreach, loop   → control flow  → handle locally
-6. Else → parse error: unknown command [command]
+1. Palabra clave de control de flujo (parallel, foreach, loop, if)  → se maneja localmente
+2. Palabra clave nativa (ask-user, notify, clarify, return)          → la ejecuta el runtime
+3. [comando] resuelto contra el registry de agentes (.agents/)       → despacho wave (proceso claude)
+4. Si no resuelve → escalación Class B: comando desconocido
 ```
 
-**v0.1 command registry** — commands guaranteed present in every arkannie installation:
+No existe el comando `[mem]` ni `[personality]` como comando: `.mem/` es memoria exclusiva
+del runtime (checkpoints §10, directorios de corrida, caché de healthcheck), inaccesible a
+los agentes; las personalities son una capa de render (campo `personality:` en
+`agent.yaml`).
 
-| Command | Type | Source |
-|---|---|---|
-| `[mem]` | native | `.arkannie/mem.md` |
-| `[personality]` | native | `.arkannie/personality.md` |
-| `[ask-user]` | native keyword | built-in |
-| `[notify]` | native keyword | built-in |
-| `[clarify]` | native keyword | built-in |
-| `parallel` | control flow | built-in |
-| `foreach` | control flow | built-in |
-| `loop` | control flow | built-in |
+### §3.1 Descubrimiento del registry de agentes
 
-Wave commands (`[name].annspec.md`) and additional native commands (`[name].md`) are discovered at runtime per §3.1.
+Al arranque, arkannie escanea el directorio `.agents/` y construye el registry:
 
-### §3.1 Agent Registry Discovery Rules
-
-At startup, Arkannie scans `registry_path` (default: `.arkannie/`) and builds the command registry:
-
-1. For each file matching `[name].annspec.md` → register `[name]` as a wave command
-2. For each file matching `[name].md` where `[name]` is not in `CORE_FILES` → register `[name]` as a native command
-3. If the same `[name]` appears as both `.annspec.md` and `.md` → `.annspec.md` wins (wave takes precedence); emit a startup warning
-4. Built-in commands are always registered regardless of scan results
-5. `CORE_FILES = {ann-lang.md, agent-protocol.md, agent-schema.yaml, mem.md, personality.md}` — never registered as commands
+1. Cada subdirectorio `.agents/<nombre>/` con un `agent.yaml` válido registra `<nombre>`
+   como comando wave. El contrato del agente (`agent.yaml`) más su plantilla `harness.md`
+   definen el agente; arkannie entrega al proceso claude el prompt renderizado completo.
+2. `agent.yaml` se valida al arranque (reglas VAL: `model ∈ {haiku,sonnet,opus}`,
+   `scope ∈ {agnostic,executor}`, `grants` subconjunto permitido según `scope`,
+   `capabilities` con `purpose`+`use_when`, y `layer.origin` válido cuando aplique). Un
+   agente que falla la validación se **excluye** solo a sí mismo; el resto carga normal.
+3. Las palabras clave nativas y de control de flujo están siempre disponibles,
+   independientemente del escaneo.
+4. El único escritor de `.agents/` es el Agent Forge (`arkannie --forge`).
 
 ---
 
-## §4 Scope Rules
+## §4 Reglas de scope
 
-### §4.1 What is a Block
+### §4.1 Qué es un bloque
 
-A block is any `{}` delimited body: handler bodies, parallel bodies, foreach bodies, loop bodies. Blocks are the unit of scope.
+Un bloque es cualquier cuerpo delimitado por `{}`: cuerpos de handler, cuerpos de
+`parallel`, `foreach`, `loop` y ramas de `if`. El bloque es la unidad de scope.
 
-### §4.2 Binding Visibility
+### §4.2 Visibilidad de bindings
 
-- Bindings created in an outer block are visible to inner blocks
-- Bindings created in an inner block are NOT visible to outer blocks
-- Bindings created in parallel sub-blocks are NOT visible to sibling sub-blocks
-- Bindings created in `each ->` are visible for that one handler execution only
+RAM es una pila de scopes: cada bloque `{}` hace `Push` de un scope nuevo y, al salir,
+`Pop` que destruye sus bindings.
 
-### §4.3 RAM Lifetime
+- Los bindings creados en un bloque externo son visibles en los bloques internos.
+- Los bindings creados en un bloque interno **no** son visibles en los externos.
+- Los bindings creados en un sub-bloque `parallel` **no** son visibles a sus hermanos.
+- Los bindings creados en `each ->` viven solo para esa ejecución del handler.
+- La resolución de un nombre recorre los scopes de adentro hacia afuera; los internos
+  sombrean a los externos.
 
-**Interactive mode:** RAM persists across all commands within a single turn. When Arkannie returns to the prompt (turn boundary), RAM is cleared.
+### §4.3 Vida de RAM
 
-**Program mode:** RAM persists for the entire program execution. RAM is cleared on program completion (success or error). Checkpoint protocol in §10 applies.
+**Modo prompt (interactivo contra un agente):** RAM persiste durante el turno; se limpia
+en el límite de turno.
 
----
-
-## §5 Template Engine
-
-The template engine resolves slots and bindings in string values before they are passed to wave agents via `context_block` (see §9).
-
-### §5.1 Simple Slot
-
-```
-{{ key }}
-```
-
-Replaced with the value of `key` from the context_block. If `key` is absent from the context_block, apply §5.4 null handling.
-
-### §5.2 Conditional Block
-
-```
-{{#if key}} content {{/if}}
-```
-
-Renders `content` only if `key` is present and non-null in context_block. If absent: entire block (including surrounding whitespace) is removed.
-
-### §5.3 Fallback Block
-
-```
-{{ key | fallback text }}
-```
-
-If `key` is absent or null: renders `fallback text`. If `key` is present: renders its value. `fallback text` is a literal string — it cannot itself contain slots.
-
-### §5.4 Null Handling Summary
-
-| Construct | Key absent | Key null |
-|---|---|---|
-| `{{ key }}` | render as empty string | render as empty string |
-| `{{#if key}}` | skip block | skip block |
-| `{{ key \| fallback }}` | render fallback | render fallback |
-
-### §5.5 Render Order
-
-1. Resolve all `$binding` references from RAM
-2. Apply conditional blocks (`{{#if}}`)
-3. Apply simple slots and fallback slots
-4. Remaining unresolved `{{ key }}` slots render as empty string (not an error)
+**Modo programa (`.ann`):** RAM persiste durante toda la ejecución del programa y se limpia
+al terminar (éxito o error). Aplica el protocolo de checkpoint de §10.
 
 ---
 
-## §6 Concurrency
+## §5 Motor de plantillas
 
-### §6.1 Dispatch Mechanism — id required
+El motor de plantillas de arkannie opera sobre el `harness.md` del agente en tiempo de
+render, rellenando **cuatro slots provistos por el runtime**:
 
-Every dispatch inside a `parallel {}` block must carry `--id=<identifier>`. The id is used for correlation (see §3 of agent-protocol.md). Missing id is a parse error.
+```
+{{ context_block }}     el context_block canónico serializado (§9)
+{{ id }}                el id del despacho
+{{ directives_pre }}    bloque de directivas antes del contexto (grupos + personality)
+{{ directives_post }}   bloque de directivas después del contexto (modifiers)
+```
+
+Los slots `{{ clave }}` que aparezcan **dentro del texto de usuario** (contexto de un
+despacho o literales de string) **no** se resuelven en v0.2: se transportan verbatim. La
+única sustitución dentro de texto de usuario es `$ref`/acceso por punto (§2.8). Un motor de
+slots de usuario con condicionales (`{{#if}}`) y fallbacks (`{{ clave | ... }}`) **no** es
+parte de v0.2 (no-objetivo).
+
+---
+
+## §6 Semántica de control de flujo
+
+### §6.1 `parallel` — `--id` requerido
+
+Todo despacho dentro de un bloque `parallel {}` **debe** llevar `--id=<identificador>`. El
+id se usa para correlación (ver `agent-protocol.md §3`). Un `--id` ausente es error de
+parseo; un `--id` duplicado dentro del mismo bloque también.
 
 ```
 parallel {
-  [seeker] query: "auth module" --id=seek-auth
-  [reviewer] target: "auth" --id=review-auth
+  [seeker] --id=seek-a alpha
+  [reviewer] --id=rev-b beta : parallel context
 }
   each -> {
-    // $result.id identifies which wave returned
+    [notify] $result
   }
 ```
 
-### §6.2 each Handler Execution
+Los despachos corren concurrentemente. `parallel {}` no admite anidamiento: un `parallel`
+dentro de otro es error de sintaxis. Solo se admiten átomos de despacho dentro del bloque.
 
-The `each ->` handler is called once per completed dispatch. Arkannie passes:
-- `$result.id` — the `--id` value from the originating dispatch
-- `$result.status` — `success`, `error`, or `info`
-- `$result.payload` — the wave's payload object
+### §6.2 Ejecución del handler `each`
 
-The handler body executes serially, in completion order. Arkannie does not re-enter the handler for a new result until the current execution completes.
+El handler `each ->` se llama una vez por despacho completado. arkannie expone
+`$result.id`, `$result.status` y `$result.payload`. El cuerpo se ejecuta en serie, en orden
+de completado; arkannie no re-entra al handler hasta que la ejecución actual termina.
 
-### §6.3 Completion Rule
+### §6.3 Regla de completado
 
-`parallel {}` is complete when all dispatched waves have returned (any status). Arkannie then proceeds to the next statement after the block.
+`parallel {}` está completo cuando todos los waves despachados retornaron (cualquier
+status). arkannie procede entonces al siguiente statement después del bloque.
 
-### §6.4 info Status in parallel
+### §6.4 Status `info` en `parallel`
 
-A wave returning `info` inside `parallel {}` is treated as a non-terminal notification. The wave is considered complete; its result is passed to `each ->` with `status: info`. The block continues to wait for remaining dispatches.
+Un wave que retorna `info` dentro de `parallel {}` se trata como notificación no terminal:
+el wave se considera completo y su resultado se pasa a `each ->` con `status: info`. El
+bloque sigue esperando a los despachos restantes.
 
-### §6.5 parallel Output
+### §6.5 Salida de `parallel`
 
-The `parallel {}` block does not produce a binding. Results are accessed only through the `each ->` handler. To accumulate results, create a binding inside `each ->` using `[mem]`.
+El bloque `parallel {}` no produce binding. A los resultados se accede solo por el handler
+`each ->`.
 
-### §6.6 foreach
+### §6.6 `foreach`
 
 ```
-foreach $list {
-  [command] $item
+foreach $items {
+  [seeker] $item
 }
 ```
 
-Sequential. `$item` is auto-bound to the current element. The block body executes once per element. Errors inside the body follow standard handler rules. `foreach` over an empty list is a no-op.
+Iteración **secuencial**. `$item` se liga automáticamente al elemento actual en cada
+vuelta. El cuerpo se ejecuta una vez por elemento. La lista puede provenir de una ruta con
+punto (`foreach $r.items { ... }`). Un `foreach` sobre una lista vacía es un no-op. Si el
+binding **no** resuelve a una lista, es un error de tipo en runtime: aviso Class A y se
+salta (§7.3).
 
-### §6.7 loop limit=N
+### §6.7 `loop limit=N [until <guarda>]`
 
 ```
-loop limit=5 {
-  [command] args
-    success -> {
-      // to stop: simply do not call loop again
-    }
+loop limit=5 until $r.status == "success" {
+  $r = [seeker] poll
 }
 ```
 
-- Maximum N iterations
-- N must be a positive integer; N ≤ 0 is a Class A error (parse time)
-- No implicit break condition — the loop runs until limit is reached unless the body contains a path that does not recurse
-- To implement conditional stop: use `success -> {}` to capture output and decide whether to continue
+- Ejecuta el cuerpo hasta `N` veces. `N` **debe** ser un entero positivo; `N` no entero o
+  `N ≤ 0` es un error de tipo, Class A, en tiempo de parseo.
+- La cláusula `until <guarda>` es opcional y va entre el `limit` y el `{`. La guarda es una
+  comparación determinista `operando (==|!=) operando` (misma forma que `if`, ver §6.9).
+- **Post-condición TRAS el cuerpo y ANTES del `Pop`.** La guarda `until` se evalúa después
+  de ejecutar el cuerpo de cada iteración y **antes** de destruir el scope de esa
+  iteración, de modo que **observa los bindings que el cuerpo acaba de crear**. Si la
+  guarda se cumple, el loop se rompe temprano.
+- **Retry-until-success es el patrón canónico:** asignar dentro del cuerpo
+  (`$r = [agente] ...`) y cortar cuando `$r.status == "success"`. En el ejemplo, si el
+  éxito llega en la tercera vuelta, el loop hace exactamente tres despachos.
+- **Sin `until`:** el loop corre exactamente `N` iteraciones (semántica de repetición
+  acotada previa).
+- Un operando de la guarda que resuelve a un valor compuesto (mapa/lista) es **no
+  comparable**: aviso Class A tratado como **no cumplido**, por lo que el loop corre hasta
+  `limit` y el programa continúa (no escala).
 
-### §6.8 Error Escalation Inside parallel
+### §6.8 Escalación de error dentro de `parallel`
 
-If a dispatch inside `parallel {}` returns `error` and no `each ->` handler is defined → Class B escalation after all dispatches complete. Arkannie reports all errors, proposes recovery, waits.
+Si un despacho dentro de `parallel {}` retorna `error` y no hay handler `each ->` que lo
+maneje → escalación Class B tras completar los despachos. Si `each ->` está definido, el
+handler es responsable del manejo de error.
 
-If `each ->` is defined, the handler is responsible for error handling.
+### §6.9 Condicional `if` / `else`
+
+```
+if $r.status == "success" {
+  [notify] $r.payload.result
+}
+else {
+  [ask-user] retry
+}
+```
+
+**Gramática:** `if <operando> (==|!=) <operando> {` seguido del bloque *then*, y
+opcionalmente `else {` en su propia línea con el bloque *else*. Un operando es exactamente
+uno de: una ruta `$ref` (con o sin punto), un literal de string, o `null`.
+
+**Semántica (`evalGuard`):**
+
+- Se resuelven ambos operandos y se aplica la comparación determinista `==`/`!=`.
+- `null == null` es **verdadero**. Un `$ref` que no resuelve vale `null`, por lo que
+  `$missing == null` es verdadero.
+- `null` comparado con un string es **falso** (`!=` lo niega).
+- Dos strings comparan por valor.
+- Solo `==` y `!=`; solo strings y `null`. No hay operadores compuestos ni aritmética
+  (no-objetivo, ver preámbulo).
+
+**Operando compuesto → skip total Class A:** si algún operando resuelve a un valor
+compuesto (mapa o lista), la guarda es no comparable: aviso Class A y se **salta el
+statement completo** — ninguna rama corre y el programa continúa. No escala.
+
+**Scoping por rama:** la rama seleccionada corre en su propio scope (`Push`/`Pop`). Los
+bindings creados dentro de una rama mueren al salir de ella; la otra rama nunca se ejecuta.
+Una guarda verdadera con rama `then` vacía es un no-op.
+
+**Comportamiento en resume (§10):** un `if` de nivel superior cuenta como **un** paso
+completado. Al reanudar más allá de él, la guarda **no** se re-evalúa y los efectos
+laterales de su rama **no** se re-disparan; el resultado final reproduce el de una corrida
+limpia.
 
 ---
 
-## §7 Parse Error Behavior
+## §7 Comportamiento ante errores de parseo y escalación
 
-### §7.1 Error Categories
+### §7.1 Categorías de error
 
-| Category | Description |
+| Categoría | Descripción |
 |---|---|
-| Syntax error | Malformed token, unclosed block, missing `--id` |
-| Unknown command | `[name]` not in registry and not a keyword |
-| Type error | Wrong argument type, binding used before set, list operation on non-list |
-| Version mismatch | `.ann` file first non-comment line ≠ `# ann v0.1` |
+| Syntax error | Token mal formado, bloque sin cerrar, `--id` faltante en `parallel`, `[return]` con reglas de etiqueta violadas, `[if]`/`while` como forma rechazada |
+| Unknown command | `[nombre]` no está en el registry y no es palabra clave |
+| Type error | Tipo de argumento incorrecto, binding usado antes de ligarse, `loop limit` no entero o ≤ 0, operación de lista sobre no-lista |
+| Version mismatch | Primera línea no comentario de un `.ann` distinta de `# ann v0.2` |
 
-### §7.2 Stop-on-First-Error
+### §7.2 Parada en el primer error
 
-Ann is stop-on-first-error for parse errors. When a parse error is detected, Arkannie stops before executing any statement in the block. Already-executing parallel dispatches are allowed to complete before error is reported.
+Ann es *stop-on-first-error* para errores de parseo: al detectar uno, arkannie se detiene
+antes de ejecutar cualquier statement. Los despachos `parallel` ya en vuelo se dejan
+completar antes de reportar.
 
-### §7.3 Escalation Class Mapping
+### §7.3 Mapeo de clase de escalación
 
-| Error category | Class |
+| Situación | Clase |
 |---|---|
-| Syntax error in `.ann` file | B |
+| Syntax error en `.ann` | B |
 | Unknown command | B |
-| Type error at parse time | A |
-| Type error at runtime | A |
-| Version mismatch in `.ann` file | B |
-| Missing `--id` in `parallel {}` | B |
-| `loop limit` ≤ 0 | A |
-| Unresolvable `$binding` in `context_block` render | B |
+| Type error (parseo o runtime) | A |
+| Version mismatch en `.ann` | B |
+| `--id` faltante o duplicado en `parallel {}` | B |
+| `loop limit` no entero o ≤ 0 | A |
+| Guarda de `if`/`until` con operando compuesto | A (skip, no escala) |
+| `foreach` sobre binding no-lista | A (skip) |
+| `[return]` con operando no ligado o ausente | A (skip) |
+| Ruta `$ref` irresoluble en interpolación de `context_block` | B |
 
-### §7.4 Error Classes Full Protocol
+### §7.4 Protocolo completo de clases de error
 
-**Class A — Local failure, handle autonomously**
+**Class A — Fallo local, se maneja de forma autónoma.** arkannie resuelve, reporta y
+continúa; sin compuerta del desarrollador. Ejemplos: error de tipo, `loop limit ≤ 0`,
+guarda con operando compuesto (se salta), `foreach` sobre no-lista, `[return]` no ligado.
+Acción: corregir o saltar, emitir un aviso breve, continuar.
 
-Arkannie resolves, reports, and continues. No developer gate.
+**Class B — Riesgo de estado compartido, detenerse y proponer.** arkannie detiene la
+ejecución. Si hay un archivo de actividad abierto, escribe `error_state: [descripción]`.
+Reporta el fallo completo, propone una vía de recuperación y espera; no ejecuta recuperación
+alguna sin instrucción explícita. Ejemplos: wave retorna `error` sin handler, `parallel`
+con error no manejado, mismatch de versión, archivo requerido faltante al arranque, binding
+irresoluble durante el render del `context_block`.
 
-Trigger examples:
-- Test failure with deterministic fix
-- Lint error with auto-fix available
-- Coverage miss where threshold is known
-- Ann type error (wrong argument type)
-- `loop limit` ≤ 0 — reject at parse with message
+**Class C — Irreversible, cero recuperación sin instrucción explícita.** arkannie se
+detiene de inmediato: sin propuesta, sin escritura de `error_state`, sin ninguna otra
+acción. El desarrollador debe dar instrucción explícita con autorización clara. Ejemplos:
+toque a sistema productivo, force push a rama protegida, rollback, operación destructiva de
+base de datos.
 
-Arkannie action: fix or skip, emit a brief notice, continue.
-
-**Class B — Shared-state risk, stop and propose**
-
-Arkannie stops execution. If an activity file is open, writes `error_state: [description]` to it. Reports the failure in full. Proposes a recovery path. Waits. Does not execute any recovery without explicit developer instruction.
-
-Trigger examples:
-- Wave returns `error` with no handler defined
-- `parallel {}` with unhandled error returns
-- Push fails
-- CI fails after merge
-- Binding unresolvable during `context_block` render
-- `.ann` version mismatch
-- Missing required file at startup
-
-Arkannie action: STOP. Write error_state. Report. Propose. Wait.
-
-**Class C — Irreversible, zero recovery without explicit instruction**
-
-Arkannie stops immediately. No proposal. No error_state write. No further action of any kind. Developer must provide explicit instruction with clear authorization before Arkannie takes any next step.
-
-Trigger examples:
-- Production system touch detected
-- Force push to protected branch requested
-- Rollback to previous release
-- Destructive database operation (DROP, TRUNCATE, DELETE without WHERE)
-
-Arkannie action: STOP. State what was detected. Wait for explicit authorization.
+El **formato exacto** de todo mensaje de error de arkannie está normado en
+`agent-protocol.md §8` y es no negociable; aquí no se re-especifica.
 
 ---
 
-## §8 Ann v0.1 Construct Status
+## §8 Estado de las construcciones de Ann v0.2
 
-| Construct | Status | Notes |
+| Construcción | Estado | Notas |
 |---|---|---|
-| `[command] args` | ✅ Supported | Wave or native dispatch |
-| `[command] arg : text` | ✅ Supported | Context block — free-form text passed as `context.text` |
-| `$name = [command]` | ✅ Supported | Binding from wave return |
-| `$name = "literal"` | ✅ Supported | String literal binding |
-| `$name = list(...)` | ✅ Supported | List constructor |
-| `success -> {}` | ✅ Supported | Handler on wave return |
-| `error -> {}` | ✅ Supported | Handler on wave return |
-| `info -> {}` | ✅ Supported | Handler on wave return |
-| `parallel {}` + `each ->` | ✅ Supported | Concurrent dispatch |
-| `foreach $list {}` | ✅ Supported | Sequential iteration |
-| `loop limit=N {}` | ✅ Supported | Bounded loop |
-| `{{ slot }}` in strings | ✅ Supported | Template slot |
-| `{{#if key}} {{/if}}` | ✅ Supported | Conditional render |
-| `{{ key \| fallback }}` | ✅ Supported | Fallback slot |
-| `[if]` / bare `if` | ❌ Not supported | Use trinary handlers |
-| `[while]` | ❌ Not supported | Use `loop limit=N` |
-| Nested `parallel {}` | ❌ Not supported | Flat only in v0.1 |
-| Anonymous blocks | ❌ Not supported | All blocks must be named |
+| `[comando] args` | Soportado | Despacho wave o palabra clave nativa |
+| `[comando] arg : texto` | Soportado | Bloque de contexto → `context.text` |
+| `$name = [comando]` | Soportado | Binding desde el `payload` de `success` |
+| `$name = "literal"` | Soportado | Binding de string literal |
+| `$name = list(...)` | Soportado | Constructor de lista |
+| `$ref` / `$ref.seg.seg` | Soportado | Acceso por punto sobre KMap (§2.8) |
+| `success -> {}` / `error -> {}` / `info -> {}` | Soportado | Handlers trinarios |
+| `parallel {}` + `each ->` | Soportado | Despacho concurrente, plano |
+| `foreach $list {}` | Soportado | Iteración secuencial; admite lista con punto |
+| `loop limit=N {}` | Soportado | Bucle acotado |
+| `loop limit=N until <guarda> {}` | Soportado | Post-condición determinista (§6.7) |
+| `if <guarda> {} else {}` | Soportado | Condicional determinista (§6.9) |
+| `[return] <operando>` | Soportado | Indicador de salida (§2.9) |
+| `[ask-user]` / `[notify]` / `[clarify]` | Soportado | Palabras clave nativas |
+| `[if]` con corchetes / `while` / `[while]` | Rechazado | Usar `if` o `loop` |
+| `parallel {}` anidado | No soportado | Solo plano en v0.2 |
+| Guardas compuestas (`&&`, `||`, aritmética) | No soportado | v0.3 (no-objetivo) |
+| Fan-out dinámico, composición, retry declarativo, construcción de datos, comillas formales | No soportado | v0.3 (no-objetivo) |
 
 ---
 
-## §9 context_block Canonical Schema
+## §9 Esquema canónico del `context_block`
 
-The `context_block` is the structured payload Arkannie sends to a wave agent. It contains all information the wave needs to execute. Arkannie is responsible for constructing it before dispatch.
-
-### §9.1 Serialization Format
-
-`context_block` is serialized as a YAML block. The wave receives it as part of its compiled prompt.
-
-### §9.2 Field Definitions
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `operation` | string | yes | The operation name (matches `operations` key in the agent spec) |
-| `context` | map | no | Key-value pairs resolved from RAM or literals. When the dispatch uses `: text` syntax (§2.7), Arkannie adds `context.text` with the full context string. |
-| `flags` | list | no | Active `--flag` values from the dispatch atom. Boolean flags: `["flag-name"]`. Valued flags: `["flag-name=value"]`. Example: `--priority=high` → `["priority=high"]`. |
-| `output_schema` | string | yes | Verbatim copy of the operation's `output_schema` block |
-
-### §9.3 Binding Serialization
-
-RAM bindings referenced in `context` are serialized at dispatch time:
-- String bindings: serialized as YAML strings
-- List bindings: serialized as YAML sequences
-- Nested maps: serialized as YAML maps
-
-If a binding is referenced in `context` but is null or unset in RAM:
-- If `context_block` field is marked optional in the spec → omit the field
-- If marked required → Class B escalation before dispatch
-
-### §9.4 Empty and Missing Fields
-
-- `context: {}` is valid (no context provided)
-- `flags: []` is valid (no flags active)
-- `output_schema` must always be present — absent is a pre-dispatch Class B failure
-
-### §9.5 Example Full Block
+El `context_block` es el payload estructurado que arkannie envía a un wave. arkannie lo
+construye antes del despacho, serializado como YAML con orden de clave fijo:
 
 ```yaml
-operation: analyze
-context:
-  target: "src/auth/"
-  depth: "full"
-flags:
+operation: <nombre de operación>
+context:                # opcional; context.text = texto del bloque de contexto (§2.7)
+  text: "..."
+flags:                  # opcional; flags booleanos como "nombre", con valor como "nombre=valor"
   - verbose
-output_schema: |
+output_schema: |        # copia verbatim del output_schema de la operación
   success:
-    findings: list of finding objects
-    summary: string
-  error:
-    reason: string
-    recoverable: boolean
-  info:
-    message: string
+    ...
 ```
 
-### §9.6 Passing Bindings Explicitly
+Reglas:
 
-To pass a RAM binding into a wave:
+- `operation` (string) y `output_schema` (string) son requeridos; `output_schema` ausente es
+  un fallo pre-despacho Class B.
+- `context: {}` y `flags: []` son válidos.
+- Los `$ref` en el texto de contexto se serializan en el despacho según §2.8 y esta misma
+  sección: un string se inlinea; un mapa/lista se agrega como campo
+  `context.<último-segmento>`.
+- Un campo de contexto requerido por la operación que ningún flag ni binding pobló es un
+  Class B pre-despacho.
 
-```
-$report = [seeker] query: "auth"
-[reviewer] target: $report --id=review
-```
-
-Arkannie resolves `$report` at dispatch time and serializes it into the `context_block.context.target` field.
+Los detalles del modelo copy-paste del `output_schema` y su regla de drift están normados en
+`agent-protocol.md §7`.
 
 ---
 
-## §10 RAM Checkpoint Protocol
+## §10 Protocolo de checkpoint de RAM
 
-### §10.1 The Problem
+### §10.1 El problema
 
-In `.ann` program mode, if Arkannie is interrupted between a wave dispatch and the use of its return value, RAM state is lost. This protocol prevents data loss.
+En modo programa `.ann`, si arkannie se interrumpe entre el despacho de un wave y el uso de
+su valor de retorno, el estado de RAM se perdería. Este protocolo previene la pérdida.
 
-### §10.2 Checkpoint Trigger
+### §10.2 Disparo del checkpoint
 
-A checkpoint is written before any wave dispatch that meets all three conditions:
-1. Executing in `.ann` program mode
-2. A subsequent statement in the same block references the dispatch's binding (`$name`)
-3. The dispatch has not yet been sent
+Se escribe un checkpoint antes de un despacho de **nivel superior** cuando: (1) se ejecuta
+en modo programa, y (2) un statement posterior del programa referencia el binding de ese
+despacho. El checkpoint captura el snapshot de RAM y el índice del último paso completado.
 
-### §10.3 Checkpoint Schema
+### §10.3 Esquema del checkpoint
 
-Written to `.mem/checkpoints/[program-name]-[timestamp].yaml`:
+El checkpoint registra el path del programa, el índice del último paso completado
+(`last_completed_step`) y un snapshot de los bindings visibles en ese momento. Un `if` de
+nivel superior cuenta como un paso completado; los bindings locales de una rama **no**
+sobreviven, por lo que nunca entran al snapshot. El esquema de serialización actual no
+cambia respecto de la línea heredada.
 
-```yaml
-program: string           # .ann file path
-timestamp: ISO8601
-last_completed_step: int  # 0-indexed step number in program
-bindings:                 # snapshot of all RAM bindings at checkpoint time
-  $name: value
-  ...
-```
+### §10.4 Recuperación
 
-### §10.4 Recovery
+Al reiniciar tras una interrupción, arkannie busca un checkpoint que coincida con el path
+del programa. Si lo encuentra, carga los bindings del snapshot y reanuda en
+`last_completed_step + 1`; si no, comienza desde el inicio. Los pasos ya completados (una
+asignación, un `if`) **no** se re-ejecutan al reanudar.
 
-On program restart after interruption:
-1. Arkannie checks for a checkpoint file matching the program name
-2. If found: loads bindings from checkpoint, resumes from `last_completed_step + 1`
-3. If not found: starts from the beginning
+### §10.5 Limpieza
 
-### §10.5 Cleanup
+El checkpoint se borra al completar el programa con éxito. **No** se borra ante error:
+existe precisamente para habilitar la recuperación.
 
-Checkpoint files are deleted on:
-- Successful program completion
-- Developer-initiated `[mem] delete` targeting the checkpoint
-- Explicit `--clean-checkpoints` flag on `arkanniestartup.py`
+---
 
-Checkpoint files are NOT deleted on error — they exist to enable recovery.
+## §11 Herramienta `--check` (parse-only)
+
+`arkannie --check <programa.ann>` hace un parseo de **solo sintaxis**, con cero efectos
+secundarios: no carga el registry, no corre el healthcheck de claude, no despacha ningún
+agente y no escribe `.output/` ni `.mem/`.
+
+- Parseo limpio → imprime una línea `OK` con el descargo explícito **"syntax only — no
+  agents were run"** y sale con **exit 0**.
+- Error de parseo → lo reporta a stderr en la forma canónica
+  `parse error at L:C [categoría]: mensaje` y sale con **exit 1**.
+- `--check` es mutuamente excluyente con los flags de ejecución (`--agent`, `--forge`,
+  `--detach`, `--interpret`) y requiere un input `.ann`. Cualquier composición inválida es
+  un error de uso: **exit 64**, sin ejecutar nada.
+
+El descargo *syntax only* es normativo: un `--check` verde garantiza **solo** que el
+programa parsea; no valida existencia de agentes, resolubilidad de bindings ni contratos de
+operación.
+
+Los códigos de salida del CLI en general son: `0` éxito · `1` error · `2` info · `64` error
+de uso.
+
+---
+
+## Apéndice: trazabilidad spec↔tests
+
+Cada sección normativa nueva o corregida está respaldada por tests; esta tabla es el candado
+anti-divergencia. Ante cualquier duda de semántica, el test decide.
+
+| Sección | Comportamiento normado | Tests que lo respaldan |
+|---|---|---|
+| §2.8 Acceso por punto (gramática y `Resolve`) | Ruta `$name(.seg)*`, `Resolve` sobre KMap, deep-copy | `internal/ram/ram_test.go`: `TestResolve`, `TestRefToken`, `TestResolveDevuelveCopiaProfunda` |
+| §2.8 Acceso por punto (parseo, sitios) | La gramática preserva la ruta en args/`[return]`/`foreach`/`list()`/operandos | `internal/ann/parser_test.go`: `TestDottedRefs`; `internal/scheduler/dotaccess_test.go`: `TestAnnParserAcceptsDottedRefs`, `TestDottedRefsEndToEnd`, `TestDotAccessResolveWiring` |
+| §2.8 Acceso por punto (interpolación, Class B) | Valor de campo inlineado; ruta irresoluble Class B nombrando base+segmento; descenso en no-mapa sugiere separar el punto | `internal/scheduler/dotaccess_test.go`: `TestDotAccess`; `internal/dispatch/dotaccess_test.go`: `TestContextBlockDotAccess` |
+| §2.9 `[return]` (indicador de salida, reglas de etiqueta) | Operando único, YAML para mapa/lista, no ligado → Class A skip, reglas de `--id` en parseo | `internal/ann/parser_test.go`: `TestParseGolden`; `internal/scheduler/dotaccess_test.go`: `TestDotAccessResolveWiring`, `TestDottedRefsEndToEnd` (caso `[return]`) |
+| §6.7 `loop ... until` (post-condición) | Guarda tras el cuerpo y antes del Pop; retry-until-success; sin until = limit exacto; compuesto = Class A tratado como no cumplido | `internal/scheduler/until_test.go`: `TestExecLoopUntil`; `internal/ann/parser_test.go`: `TestLoopUntil`, `TestLoopUntilDump` |
+| §6.9 `if` / `else` (guarda determinista) | `==`/`!=`, `null==null` verdadero, null==string falso, operando compuesto = skip total Class A, scoping por rama | `internal/scheduler/execif_test.go`: `TestExecIf`, `TestWalkRefsIf`; `internal/ann/parser_test.go`: `TestIfStatements`, `TestIfDump` |
+| §6.9 / §10 `if` + resume | El `if` de nivel superior cuenta como un paso; el resume no re-evalúa la guarda ni re-dispara la rama | `internal/scheduler/ifresume_test.go`: `TestIfTopLevelCheckpointResume` |
+| §11 `--check` (parse-only) | Exit 0/1/64, descargo *syntax only*, cero efectos secundarios, exclusión con flags de ejecución | `cmd/arkannie/check_test.go`: `TestCheckValidProgram`, `TestCheckParseError`, `TestCheckInvalidCompositions`, `TestParseArgsCheck`, `TestHelpDocumentsCheck` |
+| §1.3 palabras clave como texto libre; `until` contextual | `until`/`while` fuera de posición son texto; formas rechazadas | `internal/ann/parser_test.go`: `TestKeywordsAsFreeText`, `TestForeachLoop` |
+| §8 conjunto completo de construcciones v0.2 | Todas las construcciones parsean al AST esperado | `internal/ann/parser_test.go`: `TestParseGolden` (fixture `testdata/ann/all_constructs.ann` ↔ `.golden`) |
