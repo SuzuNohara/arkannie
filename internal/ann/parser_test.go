@@ -70,13 +70,13 @@ func TestParseGolden(t *testing.T) {
 
 func TestVersionHeader(t *testing.T) {
 	t.Run("U2-T2_program_header_col0_ok", func(t *testing.T) {
-		prog := mustParse(t, "# ann v0.1\n[seeker] auth\n", ProgramMode)
+		prog := mustParse(t, "# ann v0.2\n[seeker] auth\n", ProgramMode)
 		if len(prog.Statements) != 1 {
 			t.Fatalf("statements = %d, want 1", len(prog.Statements))
 		}
 	})
 	t.Run("U2-T2_program_header_after_comments_ok", func(t *testing.T) {
-		prog := mustParse(t, "// preamble\n\n# ann v0.1\n[seeker] auth\n", ProgramMode)
+		prog := mustParse(t, "// preamble\n\n# ann v0.2\n[seeker] auth\n", ProgramMode)
 		if firstDispatch(t, prog).Line != 4 {
 			t.Fatalf("dispatch line = %d, want 4", firstDispatch(t, prog).Line)
 		}
@@ -88,7 +88,7 @@ func TestVersionHeader(t *testing.T) {
 		}
 	})
 	t.Run("U2-T2_prompt_header_ignored", func(t *testing.T) {
-		prog := mustParse(t, "# ann v0.1\n[seeker] auth\n", PromptMode)
+		prog := mustParse(t, "# ann v0.2\n[seeker] auth\n", PromptMode)
 		if len(prog.Statements) != 1 {
 			t.Fatalf("statements = %d, want 1", len(prog.Statements))
 		}

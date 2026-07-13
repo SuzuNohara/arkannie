@@ -1,4 +1,4 @@
-# ann v0.1
+# ann v0.2
 parallel {
   [seeker] --id=same one
   [reviewer] --id=same two

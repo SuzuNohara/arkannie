@@ -8,7 +8,15 @@ package ram
 import (
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 )
+
+// RefToken is the single definition of a binding reference token: a `$`
+// followed by a name and zero or more dotted segments (§4). It is the
+// canonical matcher consumed across packages; Resolve receives the path
+// with the leading `$` already stripped.
+var RefToken = regexp.MustCompile(`\$[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*`)
 
 // Kind discriminates the shape of a Value.
 type Kind int
@@ -76,6 +84,29 @@ func (r *RAM) Get(name string) (Value, bool) {
 		}
 	}
 	return Value{}, false
+}
+
+// Resolve walks a dotted path (without the leading `$`, e.g. "x.a.b").
+// The first segment is resolved like Get; each remaining segment indexes
+// into a KMap. Any unresolvable step returns (zero, false). A path with
+// no dot is exactly Get. The returned Value is a deep copy.
+func (r *RAM) Resolve(path string) (Value, bool) {
+	segs := strings.Split(path, ".")
+	v, ok := r.Get(segs[0])
+	if !ok {
+		return Value{}, false
+	}
+	for _, seg := range segs[1:] {
+		if v.Kind != KMap {
+			return Value{}, false
+		}
+		next, ok := v.Map[seg]
+		if !ok {
+			return Value{}, false
+		}
+		v = next
+	}
+	return v, true
 }
 
 // Snapshot returns every binding visible from the current scope, with

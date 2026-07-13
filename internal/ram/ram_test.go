@@ -210,3 +210,119 @@ func TestPopEnScopeRaiz(t *testing.T) {
 		t.Fatal("el scope raíz debe sobrevivir a un Pop de más")
 	}
 }
+
+func TestResolve(t *testing.T) {
+	tests := []struct {
+		name   string
+		setup  func(r *RAM)
+		path   string
+		want   Value
+		wantOK bool
+	}{
+		{
+			name: "ruta_simple_campo_de_kmap",
+			setup: func(r *RAM) {
+				mustSet(t, r, "x", mapVal(map[string]Value{"campo": strVal("valor")}))
+			},
+			path:   "x.campo",
+			want:   strVal("valor"),
+			wantOK: true,
+		},
+		{
+			name: "ruta_profunda_camina_kmaps_anidados",
+			setup: func(r *RAM) {
+				mustSet(t, r, "x", mapVal(map[string]Value{
+					"a": mapVal(map[string]Value{"b": strVal("hondo")}),
+				}))
+			},
+			path:   "x.a.b",
+			want:   strVal("hondo"),
+			wantOK: true,
+		},
+		{
+			name: "segmento_faltante_false",
+			setup: func(r *RAM) {
+				mustSet(t, r, "x", mapVal(map[string]Value{"campo": strVal("valor")}))
+			},
+			path:   "x.inexistente",
+			want:   Value{},
+			wantOK: false,
+		},
+		{
+			name: "atraviesa_no_mapa_false",
+			setup: func(r *RAM) {
+				mustSet(t, r, "x", mapVal(map[string]Value{"s": strVal("soy-string")}))
+			},
+			path:   "x.s.imposible",
+			want:   Value{},
+			wantOK: false,
+		},
+		{
+			name: "sin_punto_equivale_a_get",
+			setup: func(r *RAM) {
+				mustSet(t, r, "x", mapVal(map[string]Value{"campo": strVal("valor")}))
+			},
+			path:   "x",
+			want:   mapVal(map[string]Value{"campo": strVal("valor")}),
+			wantOK: true,
+		},
+		{
+			name:   "base_inexistente_false",
+			setup:  func(r *RAM) {},
+			path:   "no_existe.campo",
+			want:   Value{},
+			wantOK: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := New()
+			tt.setup(r)
+			got, ok := r.Resolve(tt.path)
+			if ok != tt.wantOK {
+				t.Fatalf("Resolve(%q) ok = %v; quiero %v", tt.path, ok, tt.wantOK)
+			}
+			if tt.wantOK && !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("Resolve(%q) = %+v; quiero %+v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveDevuelveCopiaProfunda(t *testing.T) {
+	r := New()
+	mustSet(t, r, "x", mapVal(map[string]Value{
+		"a": mapVal(map[string]Value{"b": strVal("v")}),
+	}))
+	got, ok := r.Resolve("x.a")
+	if !ok {
+		t.Fatal("Resolve(x.a) = false")
+	}
+	got.Map["b"] = strVal("mutado")
+	again, _ := r.Resolve("x.a")
+	if again.Map["b"].Str != "v" {
+		t.Fatalf("mutar el valor devuelto por Resolve alteró lo almacenado: %+v", again)
+	}
+}
+
+func TestRefToken(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"nombre_simple", "$x", "$x"},
+		{"un_campo", "$x.campo", "$x.campo"},
+		{"ruta_profunda", "$x.a.b", "$x.a.b"},
+		{"dollar_solo_no_matchea", "$", ""},
+		{"no_captura_mas_alla_del_charset", "$x-y", "$x"},
+		{"trailing_dot_no_se_captura", "$x.", "$x"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := RefToken.FindString(tt.in); got != tt.want {
+				t.Fatalf("RefToken.FindString(%q) = %q; quiero %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}

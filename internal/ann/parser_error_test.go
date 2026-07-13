@@ -16,7 +16,7 @@ func TestVersionMismatch(t *testing.T) {
 		}
 	})
 	t.Run("U2-T10_header_not_col0", func(t *testing.T) {
-		mustFail(t, " # ann v0.1\n[seeker] auth\n", ProgramMode, VersionMismatch)
+		mustFail(t, " # ann v0.2\n[seeker] auth\n", ProgramMode, VersionMismatch)
 	})
 	t.Run("U2-T10_header_absent", func(t *testing.T) {
 		mustFail(t, "[seeker] auth\n", ProgramMode, VersionMismatch)

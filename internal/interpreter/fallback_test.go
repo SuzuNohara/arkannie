@@ -59,7 +59,7 @@ func testParseError() *ann.ParseError {
 
 func TestTryRepair(t *testing.T) {
 	t.Run("U15-T2_ann_block_returns_fixed", func(t *testing.T) {
-		program := "# ann v0.1\n[echo] --id greet --text \"hi\""
+		program := "# ann v0.2\n[echo] --id greet --text \"hi\""
 		result := "Here is the fix:\n```ann\n" + program + "\n```\nDone."
 		stub := &recordingStub{stdout: claudeJSON(t, result)}
 
@@ -76,7 +76,7 @@ func TestTryRepair(t *testing.T) {
 	})
 
 	t.Run("U15-T3_argv_and_prompt_shape", func(t *testing.T) {
-		program := "# ann v0.1\n[echo] --id x"
+		program := "# ann v0.2\n[echo] --id x"
 		result := "```ann\n" + program + "\n```"
 		stub := &recordingStub{stdout: claudeJSON(t, result)}
 		perr := testParseError()

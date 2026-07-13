@@ -1,4 +1,4 @@
-# ann v0.1
+# ann v0.2
 // Recomposition of nova [audit]: three lenses scanned in PARALLEL over the same
 // target, each lens's findings returned to the output body. Mirrors nova's
 // 3-parallel-Explore fan-out. Final dedup/rating aggregation would add one
