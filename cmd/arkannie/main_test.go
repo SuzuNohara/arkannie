@@ -665,6 +665,31 @@ func TestHelp(t *testing.T) {
 	}
 }
 
+// TestHelpDocumentsV02Constructs pins the tutorial to the v0.2 language: it must
+// teach dot-access (value, not whole-envelope), if/else, loop ... until and the
+// --check validation flow. Guards against silent regression to v0.1 wording.
+func TestHelpDocumentsV02Constructs(t *testing.T) {
+	var b strings.Builder
+	printHelp(&b)
+	h := b.String()
+	for _, marker := range []string{
+		"DOT ACCESS",
+		"$r.payload.out",
+		"CONDITIONALS (if / else)",
+		"if $r.status == \"success\"",
+		"loop limit=5 until $r.status == \"success\"",
+		"--check",
+		"syntax only — no agents were run",
+	} {
+		if !strings.Contains(h, marker) {
+			t.Errorf("tutorial missing v0.2 marker %q", marker)
+		}
+	}
+	if strings.Contains(h, "v0.1") {
+		t.Errorf("tutorial still references v0.1")
+	}
+}
+
 func TestIDRequired(t *testing.T) {
 	app, _, errb := newTestApp(t, &stubSpawner{})
 	code := app.Run([]string{"--agent=echo", "no id here"})

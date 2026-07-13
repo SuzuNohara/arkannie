@@ -1,5 +1,13 @@
 # Divergence Notes — arkannie vs annie2/arkannie specs
 
+> **HISTÓRICO — no normativo.** Este documento registra las divergencias annie2→arkannie
+> tal como se planificaron **antes** de la spec nativa v0.2. Desde que `ann-lang.md` se
+> reescribió como especificación **nativa y normativa** de Ann v0.2, la autoridad sobre la
+> sintaxis y semántica del lenguaje reside allí (y en `agent-protocol.md` para el envelope);
+> este archivo ya **no** es normativo. Se conserva como registro de decisiones para
+> trazabilidad. La afirmación de abajo de que `ann-lang.md` es "copia verbatim de annie2 y
+> sigue normativa" quedó obsoleta con esa reescritura: léase en clave histórica.
+
 Las specs en esta carpeta (`ann-lang.md`, `agent-protocol.md`, `agent-schema.yaml`) son copias
 verbatim de `annie2/.arkannie/` y siguen siendo **normativas**. Esta nota documenta las divergencias
 controladas que la nueva arkannie introduce. Todo lo no listado aquí aplica tal cual.

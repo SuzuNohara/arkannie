@@ -1,4 +1,4 @@
-// Package ram implements binding storage for Ann v0.1 as a stack of
+// Package ram implements binding storage for Ann v0.2 as a stack of
 // scopes (spec/ann-lang.md §4). Every block {} pushes a scope; leaving
 // it pops the scope and destroys its bindings. Values returned by Get
 // and Snapshot are deep copies: callers may mutate them freely without
@@ -21,7 +21,7 @@ var RefToken = regexp.MustCompile(`\$[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*`)
 // Kind discriminates the shape of a Value.
 type Kind int
 
-// Value kinds supported by Ann v0.1 bindings.
+// Value kinds supported by Ann v0.2 bindings.
 const (
 	KString Kind = iota
 	KList

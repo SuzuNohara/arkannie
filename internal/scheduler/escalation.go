@@ -1,4 +1,4 @@
-// Package scheduler executes a parsed Ann v0.1 program: sequential
+// Package scheduler executes a parsed Ann v0.2 program: sequential
 // dispatch with RAM scoping, parallel {} blocks, foreach/loop control
 // flow, checkpoints (§10) and the trinary error classes A/B/C (§7.4).
 // It orchestrates the pure and I/O packages (ann, ram, registry,

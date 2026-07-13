@@ -1,5 +1,5 @@
 // Package ann implements the lexer and recursive-descent parser for the
-// Ann v0.1 command language (spec/ann-lang.md §1–§3, §7, §8).
+// Ann v0.2 command language (spec/ann-lang.md §1–§3, §7, §8).
 //
 // The package is pure: no I/O, no external dependencies. Parse compiles a
 // source buffer into an AST and stops on the first error (§7.2).

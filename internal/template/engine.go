@@ -1,4 +1,4 @@
-// Package template implements the Ann v0.1 template engine (spec §5).
+// Package template implements the Ann v0.2 template engine (spec §5).
 //
 // Rendering is a pure function of the template text and the slot map.
 // Per §5.5 the caller resolves $bindings before calling Render; here

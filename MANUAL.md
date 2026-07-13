@@ -6,7 +6,11 @@ minimalista), orquestando agentes que corren como procesos `claude` aislados.
 El binario es determinista: no hay LLM en el camino de compilación/despacho —
 Claude solo ejecuta los agentes.
 
-Versión: `0.1.0` · Lenguaje: Ann v0.1
+Versión: `0.2.0` · Lenguaje: Ann v0.2
+
+> La letra dura de la sintaxis y semántica vive en `spec/ann-lang.md` (spec
+> **normativa** de Ann v0.2). Este manual es **didáctico**: para cualquier duda
+> de comportamiento, la spec y sus tests deciden.
 
 > Referencia rápida en cualquier momento con `arkannie --help`. Este manual es
 > la versión extendida.
@@ -43,8 +47,8 @@ make dist         # produce dist/arkannie-<version>.tar.gz
 El tarball es un `ARKANNIE_HOME` autocontenido (binario + shim + `.agents/` +
 identidad + specs + este manual). En la máquina destino:
 ```bash
-tar -xzf arkannie-0.1.0.tar.gz
-ln -sf "$PWD/arkannie-0.1.0/bin/arkannie.sh" ~/.local/bin/arkannie
+tar -xzf arkannie-0.2.0.tar.gz
+ln -sf "$PWD/arkannie-0.2.0/bin/arkannie.sh" ~/.local/bin/arkannie
 arkannie --help
 ```
 
@@ -101,6 +105,8 @@ colisión, la anterior se archiva a `.output/<id>-N.md`.
 | `--mode=<complete\|fragment\|layer>` | estrategia de absorción (requiere `--absorb`) |
 | `--allow-layer[=n,n]` | consentimiento para despachar agentes *layer* (todos, o solo los nombrados; valor solo en forma `=`) |
 | `--catalog[=agente]` | imprime el catálogo de capacidades — la carta de cada agente, o la de uno solo (valor solo en forma `=`) |
+| `--man[=agente]` | imprime el manual de ejecución por agente — contrato completo por operación, o el de uno solo (valor solo en forma `=`) |
+| `--check <prog.ann>` | valida la sintaxis de un programa sin ejecutarlo (solo parseo; ver §11); exit 0 OK, 1 en error de parseo |
 | `validate [--agent=<n>]` | valida los contratos bajo `.agents/` |
 | `--version` | imprime la versión de arkannie y sale |
 | `--help`, `-h` | imprime el tutorial |
@@ -110,7 +116,7 @@ colisión, la anterior se archiva a `.output/<id>-N.md`.
 
 ---
 
-## 4. El lenguaje Ann (v0.1)
+## 4. El lenguaje Ann (v0.2)
 
 Ann es un lenguaje de **despacho**, no de propósito general. Tres niveles
 estructurales: **arkannie** (el runtime, Nivel 1), los **wave agents** (Nivel 2,
@@ -119,7 +125,7 @@ un proceso claude por dispatch que devuelve un envelope), y los **sub-agents**
 
 ### Estructura del programa
 ```
-# ann v0.1                 // header obligatorio, línea 1, columna 0
+# ann v0.2                 // header obligatorio, línea 1, columna 0
 // los comentarios son de línea con //
 ```
 
@@ -139,12 +145,27 @@ $r = [seeker] : encuéntralo      // $r contiene el payload de éxito
 ```
 Cada bloque `{ }` es un scope: los bindings creados dentro desaparecen al cerrar.
 
+### Acceso por punto (`$ref.seg.seg`)
+Un binding que contiene un mapa se lee campo por campo con puntos. En v0.2 una
+ruta con punto resuelve al **valor** de ese campo — **no** existe el atajo
+"sobre completo" de v0.1 (`$r.payload` como el payload entero era la forma vieja
+y ya no aplica):
+```
+[echo] : el estado es $r.status           // inlinea el valor string
+[writer] : la respuesta es $r.payload.out // camina payload, luego out
+```
+Cada segmento indexa un nivel del mapa por clave. Si un paso intermedio no es un
+mapa, o la clave no existe, la ruta no resuelve; en texto de contexto una ruta
+irresoluble es un error pre-dispatch (Class B) que nombra base y segmento. La
+letra dura está en `spec/ann-lang.md §2.8`.
+
 ### Handlers trinarios
 Todo agente devuelve `success`, `error` o `info`. Se enganchan hasta tres
-handlers; dentro, `$result` expone `{id, status, payload}`:
+handlers; dentro, `$result` expone `{id, status, payload}` — accedidos por punto
+al campo concreto que necesitas:
 ```
 [seeker] : busca el config
-  success -> { [writer] : usa $result.payload }
+  success -> { [writer] : usa $result.payload.result }
   error   -> { [notify] no se encontró }
   info    -> { }
 ```
@@ -153,13 +174,45 @@ Un `error` sin handler de error escala y falla la corrida.
 ### Control de flujo
 ```
 foreach $items { [worker] : $item }      // iteración secuencial sobre una lista
-loop limit=3   { [worker] : reintenta }  // repetición acotada
+loop limit=3   { [worker] : reintenta }  // repetición acotada (N vueltas exactas)
 parallel {                               // despacho concurrente (cada uno --id único)
   [a] --id=one : x
   [b] --id=two : y
 }
-  each -> { [notify] : $result.payload }
+  each -> { [notify] : $result.payload.out }
 ```
+
+#### `if` / `else` — condicional determinista
+Una guarda elige una rama. Es **una sola** comparación, solo `==` o `!=`, entre
+dos operandos; un operando es un `$ref` (con o sin punto), un literal de string,
+o `null`. **No** hay operadores compuestos (`&&`, `||`) ni aritmética:
+```
+if $r.status == "success" {
+  [notify] $r.payload.result
+}
+else {
+  [ask-user] reintentar
+}
+```
+`null == null` es verdadero; un `$ref` que no resuelve vale `null`, así que
+`$faltante == null` se cumple. Si algún operando resuelve a un **compuesto**
+(mapa o lista) la guarda es no comparable: el `if` completo se **salta** (aviso
+Class A, no escala) y el programa sigue. La rama elegida corre en su propio
+scope.
+
+#### `loop limit=N until <guarda>` — retry hasta éxito
+La cláusula `until` opcional convierte el bucle acotado en el patrón canónico de
+reintento. La guarda (misma forma que `if`) se evalúa **después** del cuerpo de
+cada iteración y **antes** de cerrar su scope, por lo que observa los bindings
+que el cuerpo acaba de crear; si se cumple, el loop corta temprano:
+```
+loop limit=5 until $r.status == "success" {
+  $r = [seeker] : poll
+}
+```
+Si el éxito llega en la tercera vuelta, se hacen exactamente tres despachos. Sin
+`until`, el loop corre las `N` vueltas completas. Un operando compuesto en la
+guarda se trata como no cumplido (Class A): el loop corre hasta `limit`.
 
 ### `[return]` — el indicador de salida
 El programa decide qué aparece en la salida; los payloads de éxito **no** se
@@ -300,6 +353,29 @@ healthcheck) e es inaccesible a los agentes.
 | `usage error: ...` (exit 64) | combinación de flags inválida; revisa §3 |
 | `VAL-NN: ...` al validar | contrato de agente inválido; ver §5 y `spec/divergence-notes.md` |
 | `claude healthcheck failed` | el CLI de `claude` no está en el PATH o `claude_bin` mal configurado |
+
+---
+
+## 11. Validación local (`--check`)
+
+Antes de correr un programa puedes validar **solo su sintaxis**, sin efectos
+secundarios: no carga el registry, no corre el healthcheck de `claude`, no
+despacha ningún agente y no escribe `.output/` ni `.mem/`.
+
+```bash
+arkannie --check programa.ann
+```
+
+- Parseo limpio → imprime una línea `OK` con el descargo **"syntax only — no
+  agents were run"** y sale con **exit 0**.
+- Error de parseo → lo reporta a stderr como
+  `parse error at L:C [categoría]: mensaje` y sale con **exit 1**.
+
+`--check` es mutuamente excluyente con las banderas de ejecución (`--agent`,
+`--forge`, `--detach`, `--interpret`) y requiere un input `.ann`; una
+combinación inválida es error de uso (**exit 64**). Un `--check` verde garantiza
+**solo** que el programa parsea: no valida existencia de agentes, resolubilidad
+de bindings ni contratos de operación (ver `spec/ann-lang.md §11`).
 
 ---
 

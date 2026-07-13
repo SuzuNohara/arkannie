@@ -195,7 +195,7 @@ func (p *parser) parseKeywordStmt(toks []token) (Stmt, *ParseError) {
 
 // errTrinary rejects unsupported conditionals (§8).
 func errTrinary(t token, form string) *ParseError {
-	return errAt(t, Syntax, "%s is not supported in Ann v0.1 — use trinary handlers", form)
+	return errAt(t, Syntax, "%s is not supported in Ann v0.2 — use trinary handlers", form)
 }
 
 // parseDispatch parses a command atom (§2.1): args, flags and context.
@@ -386,7 +386,7 @@ func (p *parser) parseParallelBody(par *Parallel) *ParseError {
 		case toks[0].kind == tkRBrace:
 			return nil
 		case toks[0].kind == tkIdent && toks[0].text == "parallel":
-			return errAt(toks[0], Syntax, "nested parallel blocks are not supported in Ann v0.1")
+			return errAt(toks[0], Syntax, "nested parallel blocks are not supported in Ann v0.2")
 		case toks[0].kind == tkCommand:
 			d, err := p.parseDispatch(toks)
 			if err != nil {

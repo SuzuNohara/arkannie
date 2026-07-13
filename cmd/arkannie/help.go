@@ -81,7 +81,7 @@ TRINARY HANDLERS
   Every agent returns success, error, or info. Attach up to three handlers:
     [seeker] : find the config
       success -> {
-        [writer] : use $result.payload
+        [writer] : use $result.payload.result
       }
       error -> {
         [notify] could not find it
@@ -97,23 +97,55 @@ BINDINGS (RAM) and $result
   Names are [A-Za-z0-9_]+ and cannot be reserved keywords. Every block { }
   is a scope: bindings created inside it vanish when it closes.
 
+DOT ACCESS ($ref.seg.seg)
+  A binding that holds a map is read field-by-field with dots. In v0.2 a
+  dotted path resolves to the VALUE of that field — there is no "whole
+  envelope" shorthand:
+    [echo] : status is $r.status              // inlines the string value
+    [writer] : the answer is $r.payload.out   // walks payload, then out
+  Each segment indexes one level into a map by key. If an intermediate step
+  is not a map, or the key is missing, the path does not resolve. In context
+  text an unresolved path is a pre-dispatch error naming the base and the
+  failing segment.
+
 CONTROL FLOW
-  Sequential iteration over a list binding:
-    foreach $items {
+  Sequential iteration over a list binding (accepts a dotted path too):
+    foreach $r.items {
       [worker] : $item
     }
   Bounded repetition:
     loop limit=3 {
       [worker] : retry
     }
+  Retry-until-success — the canonical poll loop. The until guard runs AFTER
+  the body of each iteration, so it observes the bindings the body just made;
+  if it holds, the loop breaks early:
+    loop limit=5 until $r.status == "success" {
+      $r = [seeker] : poll
+    }
+  Without until, the loop runs exactly N times.
   Concurrent dispatch (every dispatch needs a unique --id):
     parallel {
       [a] --id=one : x
       [b] --id=two : y
     }
       each -> {
-        [notify] : $result.payload
+        [notify] : $result.payload.out
       }
+
+CONDITIONALS (if / else)
+  A deterministic guard picks one branch. The guard is a single comparison,
+  == or != only, between two operands; an operand is a $ref (dotted or not),
+  a string literal, or null. There are no compound operators (no &&, ||):
+    if $r.status == "success" {
+      [notify] $r.payload.result
+    }
+    else {
+      [ask-user] retry
+    }
+  null == null is true; an unresolved $ref is null, so $missing == null holds.
+  If an operand resolves to a map or list it is not comparable: the whole if
+  is skipped (a local, non-escalating notice) and the program continues.
 
 MULTIPLE AGENTS IN ONE PROGRAM
   A single .ann may dispatch different agents — just name them. Each [command]
@@ -149,6 +181,16 @@ NATIVE KEYWORDS
     [notify] <text>     add a note to the report's Notices section
     [clarify] <text>    same as notify, for clarifying remarks
     [return] <operand>  emit an output block (see above)
+
+VALIDATING WITHOUT RUNNING (--check)
+  Parse-check a program before running it, with zero side effects — no
+  registry load, no claude healthcheck, no dispatch, no .output/ or .mem/:
+    arkannie --check program.ann
+  A clean parse prints OK with the disclaimer
+  "syntax only — no agents were run" and exits 0; a parse error goes to
+  stderr as "parse error at L:C [category]: message" and exits 1. --check is
+  mutually exclusive with the execution flags (--agent, --forge, --detach,
+  --interpret); an invalid combination is a usage error (exit 64).
 
 OUTPUT FILE (.output/<id>.md)
   Frontmatter: id, agent(s), status, started, finished, input. Body: the

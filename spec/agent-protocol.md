@@ -121,7 +121,7 @@ Arkannie applies timeouts at three levels, evaluated in priority order (highest 
 | Level | Source | Default |
 |---|---|---|
 | Per-operation | `--timeout=N` flag on the dispatch atom | none |
-| Per-command | `timeout:` field in `[agent].annspec.md` | none |
+| Per-command | `timeout:` field in the agent's `agent.yaml` | none |
 | Global default | `timeout_default` in `arkannie.config.yaml` | 120s |
 
 If none of the above is set → no timeout applied (dispatch runs indefinitely).
@@ -173,8 +173,8 @@ For Class A: Arkannie emits an error message and skips the dispatch.
 
 | Failure | Cause | Class |
 |---|---|---|
-| Agent spec file missing | `.annspec.md` existed at startup but not at dispatch time | B |
-| context_block render failure | Required binding is unresolvable (see §9.3 of ann-lang.md) | B |
+| Agent spec file missing | `agent.yaml` existed at startup but not at dispatch time | B |
+| context_block render failure | Required binding is unresolvable (see ann-lang.md §2.8 and §9) | B |
 | `output_schema` absent | Not defined in the operation spec | B |
 
 ---
