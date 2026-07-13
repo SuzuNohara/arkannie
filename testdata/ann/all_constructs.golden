@@ -27,3 +27,22 @@ Program
     Dispatch line=37 cmd=seeker args=["again"] id="" ctx="" flags={}
       Handler success
         Dispatch line=39 cmd=notify args=["done"] id="" ctx="" flags={}
+  Assign line=43 name=r
+    Dispatch line=43 cmd=seeker args=["fetch"] id="" ctx="" flags={}
+  Dispatch line=45 cmd=activity args=["act-003"] id="" ctx="track $r.status here" flags={}
+  Dispatch line=46 cmd=echo args=["$r.payload.out"] id="" ctx="" flags={}
+  Assign line=47 name=paths
+    ListLit ["$r.items" "static" "$r.meta.path"]
+  Dispatch line=48 cmd=return args=["$r.payload.result"] id="out" ctx="" flags={id="out"}
+  Foreach line=50 list=$r.items
+    Dispatch line=51 cmd=seeker args=["$item"] id="" ctx="" flags={}
+  If line=54 op=== left=$r.status right="success"
+    Then
+      Dispatch line=55 cmd=notify args=["$r.payload.result"] id="" ctx="" flags={}
+    Else
+      Dispatch line=58 cmd=ask-user args=["retry"] id="" ctx="" flags={}
+  If line=61 op=!= left=$r.error right=null
+    Then
+      Dispatch line=62 cmd=notify args=["failure"] id="" ctx="" flags={}
+  Loop line=65 limit=5 until op=== left=$r.status right="success"
+    Dispatch line=66 cmd=seeker args=["poll"] id="" ctx="" flags={}

@@ -39,3 +39,29 @@ loop limit=3 {
       [notify] done
     }
 }
+
+$r = [seeker] fetch
+
+[activity] act-003 : track $r.status here
+[echo] $r.payload.out
+$paths = list($r.items, "static", $r.meta.path)
+[return] --id=out $r.payload.result
+
+foreach $r.items {
+  [seeker] $item
+}
+
+if $r.status == "success" {
+  [notify] $r.payload.result
+}
+else {
+  [ask-user] retry
+}
+
+if $r.error != null {
+  [notify] failure
+}
+
+loop limit=5 until $r.status == "success" {
+  [seeker] poll
+}
