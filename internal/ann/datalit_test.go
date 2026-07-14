@@ -18,9 +18,20 @@ func elemSrc(e Elem) string {
 			parts[i] = elemSrc(el)
 		}
 		return "list(" + strings.Join(parts, ", ") + ")"
+	case e.Map != nil:
+		return mapSrc(e.Map)
 	default:
 		return e.Str
 	}
+}
+
+// mapSrc reconstructs the source token form of a parsed MapLit for golden dumps.
+func mapSrc(m *MapLit) string {
+	parts := make([]string, len(m.Entries))
+	for i, ent := range m.Entries {
+		parts[i] = ent.Key + ": " + elemSrc(ent.Val)
+	}
+	return "map(" + strings.Join(parts, ", ") + ")"
 }
 
 func assignExpr(t *testing.T, src string) Expr {

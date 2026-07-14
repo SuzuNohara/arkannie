@@ -136,5 +136,12 @@ func dumpExpr(b *strings.Builder, e Expr, depth int) {
 			parts[i] = elemSrc(el)
 		}
 		fmt.Fprintf(b, "ListLit %q\n", parts)
+	case MapLit:
+		writeIndent(b, depth)
+		parts := make([]string, len(ex.Entries))
+		for i, ent := range ex.Entries {
+			parts[i] = ent.Key + ": " + elemSrc(ent.Val)
+		}
+		fmt.Fprintf(b, "MapLit %q\n", parts)
 	}
 }

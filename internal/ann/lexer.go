@@ -21,9 +21,11 @@ const (
 	tkEq                         // == (if operator, §8)
 	tkNe                         // != (if operator, §8)
 	tkComma                      // ,
+	tkColon                      // : inside a constructor (map entry separator, §2.6)
 	tkRParen                     // )
 	tkListOpen                   // list(
 	tkConcatOpen                 // concat(
+	tkMapOpen                    // map(
 	tkContext                    // single-line context text after ": " (verbatim)
 	tkContextOpen                // ":" at end of line — multi-line context follows
 )
@@ -38,9 +40,10 @@ type token struct {
 // lineLexer tokenizes a single source line. Context blocks and blank lines
 // are line-level constructs, so the parser drives the lexer per line.
 type lineLexer struct {
-	src  string
-	pos  int
-	line int
+	src   string
+	pos   int
+	line  int
+	depth int // open constructor parens (list/concat/map) not yet closed on this line
 }
 
 // lexLine tokenizes one line. Comments (// outside strings) end the line.
@@ -89,9 +92,18 @@ func (lx *lineLexer) next() (token, bool, *ParseError) {
 	case strings.HasPrefix(lx.src[lx.pos:], "--"):
 		return lx.lexFlag(col)
 	case c == ':':
+		// Inside a constructor a ':' separates a map key from its value; only at
+		// depth 0 does it open context text (§2.6, §2.7).
+		if lx.depth > 0 {
+			lx.pos++
+			return token{kind: tkColon, line: lx.line, col: col}, false, nil
+		}
 		return lx.lexContext(col)
 	case c == '{' || c == '}' || c == '=' || c == ',' || c == ')':
 		lx.pos++
+		if c == ')' && lx.depth > 0 {
+			lx.depth--
+		}
 		return token{kind: symbolKind(c), line: lx.line, col: col}, false, nil
 	default:
 		return lx.lexWord(col)
@@ -230,9 +242,9 @@ func (lx *lineLexer) lexContext(col int) (token, bool, *ParseError) {
 }
 
 // lexWord reads a bare word: letters, digits, '_', '-', '.', '/'.
-// "list(" and "concat(" are recognized as constructor openers (§2.6); the
-// words alone (not immediately followed by '(') stay ordinary identifiers, so
-// "concat"/"list" remain free text as args or inside context.
+// "list(", "concat(" and "map(" are recognized as constructor openers (§2.6);
+// the words alone (not immediately followed by '(') stay ordinary identifiers,
+// so "list"/"concat"/"map" remain free text as args or inside context.
 func (lx *lineLexer) lexWord(col int) (token, bool, *ParseError) {
 	i := lx.pos
 	for i < len(lx.src) && isWordChar(lx.src[i]) {
@@ -248,6 +260,7 @@ func (lx *lineLexer) lexWord(col int) (token, bool, *ParseError) {
 	lx.pos = i
 	if kind, ok := constructorOpen(word); ok && lx.pos < len(lx.src) && lx.src[lx.pos] == '(' {
 		lx.pos++
+		lx.depth++
 		return token{kind: kind, text: word, line: lx.line, col: col}, false, nil
 	}
 	return token{kind: tkIdent, text: word, line: lx.line, col: col}, false, nil
@@ -261,6 +274,8 @@ func constructorOpen(word string) (tokKind, bool) {
 		return tkListOpen, true
 	case "concat":
 		return tkConcatOpen, true
+	case "map":
+		return tkMapOpen, true
 	default:
 		return 0, false
 	}

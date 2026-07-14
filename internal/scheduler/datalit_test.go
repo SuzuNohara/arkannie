@@ -247,3 +247,33 @@ func TestEscapedDollarInArgs(t *testing.T) {
 		}
 	})
 }
+
+// TestAssignMapLit verifies a top-level `$m = map(...)` binds at runtime
+// (execAssign wiring — C3-A gap closed by NOVA).
+func TestAssignMapLit(t *testing.T) {
+	s, st := newValState()
+	err := s.execAssign(st, &ann.Assign{Name: "m", Expr: ann.MapLit{
+		Entries: []ann.MapEntry{{Key: "k", Val: strElem("v")}},
+	}})
+	if err != nil {
+		t.Fatalf("execAssign: %v", err)
+	}
+	v, ok := st.ram.Get("m")
+	if !ok || v.Kind != ram.KMap || v.Map["k"].Str != "v" {
+		t.Fatalf("binding m = %#v ok=%v, want KMap{k:v}", v, ok)
+	}
+}
+
+// TestWalkRefsTracksTopLevelMap closes the wave-3 review finding: a binding
+// referenced by a TOP-LEVEL map() assign must be checkpoint-tracked.
+func TestWalkRefsTracksTopLevelMap(t *testing.T) {
+	stmts := []ann.Stmt{
+		&ann.Assign{Name: "x", Expr: &ann.Dispatch{Command: "echo"}},
+		&ann.Assign{Name: "m", Expr: ann.MapLit{Entries: []ann.MapEntry{
+			{Key: "k", Val: refElem("x")},
+		}}},
+	}
+	if !producesReferencedBinding(stmts, 0) {
+		t.Error("dispatch binding x referenced by top-level map() must be checkpoint-tracked")
+	}
+}

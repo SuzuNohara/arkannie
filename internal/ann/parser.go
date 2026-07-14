@@ -322,8 +322,10 @@ func (p *parser) parseExpr(toks []token) (Expr, *ParseError) {
 		return parseList(toks)
 	case tkConcatOpen:
 		return parseConcat(toks)
+	case tkMapOpen:
+		return parseMap(toks)
 	default:
-		return nil, errAt(toks[0], Syntax, "expected [command], string literal, list() or concat() after '='")
+		return nil, errAt(toks[0], Syntax, "expected [command], string literal, list(), concat() or map() after '='")
 	}
 }
 
@@ -388,9 +390,9 @@ func parseElems(toks []token, i int, opener token, name string) ([]Elem, int, *P
 	return elems, i + 1, nil
 }
 
-// parseElem parses one list/concat element at toks[i]: a string literal, a $ref
-// (with optional dot-path), or a nested list() constructor. It returns the
-// element and the index just past it.
+// parseElem parses one list/concat/map element at toks[i]: a string literal, a
+// $ref (with optional dot-path), or a nested list()/map() constructor. It
+// returns the element and the index just past it.
 func parseElem(toks []token, i int) (Elem, int, *ParseError) {
 	switch toks[i].kind {
 	case tkString:
@@ -404,10 +406,104 @@ func parseElem(toks []token, i int) (Elem, int, *ParseError) {
 			return Elem{}, 0, err
 		}
 		return Elem{List: &ll}, next, nil
+	case tkMapOpen:
+		ml, next, err := parseMapAt(toks, i)
+		if err != nil {
+			return Elem{}, 0, err
+		}
+		return Elem{Map: &ml}, next, nil
 	default:
 		return Elem{}, 0, errAt(toks[i], Syntax,
-			"list elements must be string literals, $bindings or nested list()")
+			"list elements must be string literals, $bindings or nested list()/map()")
 	}
+}
+
+// parseMap parses a top-level map(...) expression and rejects trailing tokens.
+// Keys are bare identifiers; values share the element grammar of list() (§2.6,
+// v0.3, R7).
+func parseMap(toks []token) (Expr, *ParseError) {
+	ml, next, err := parseMapAt(toks, 0)
+	if err != nil {
+		return nil, err
+	}
+	if next != len(toks) {
+		return nil, errAt(toks[next], Syntax, "unexpected tokens after map()")
+	}
+	return ml, nil
+}
+
+// parseMapAt parses a map(...) starting at toks[i] (a tkMapOpen). It returns the
+// MapLit and the index just past the closing ')'.
+func parseMapAt(toks []token, i int) (MapLit, int, *ParseError) {
+	open := toks[i]
+	entries, next, err := parseEntries(toks, i+1, open)
+	if err != nil {
+		return MapLit{}, 0, err
+	}
+	return MapLit{Entries: entries, Line: open.line}, next, nil
+}
+
+// parseEntries parses comma-separated "key: value" pairs from toks[i] until the
+// closing ')'. Duplicate keys are a Syntax error at the offending key's L:C.
+// It returns the entries and the index just past ')'.
+func parseEntries(toks []token, i int, opener token) ([]MapEntry, int, *ParseError) {
+	entries := []MapEntry{}
+	seen := map[string]int{}
+	for i < len(toks) && toks[i].kind != tkRParen {
+		keyTok := toks[i]
+		ent, next, err := parseEntry(toks, i)
+		if err != nil {
+			return nil, 0, err
+		}
+		if prev, dup := seen[ent.Key]; dup {
+			return nil, 0, errAt(keyTok, Syntax,
+				"duplicate map key %q (first used at line %d)", ent.Key, prev)
+		}
+		seen[ent.Key] = keyTok.line
+		entries = append(entries, ent)
+		i = next
+		if i < len(toks) && toks[i].kind == tkComma {
+			i++
+		}
+	}
+	if i >= len(toks) {
+		return nil, 0, errAt(opener, Syntax, "unclosed map()")
+	}
+	return entries, i + 1, nil
+}
+
+// parseEntry parses one "key: value" pair at toks[i]. The key is a bare
+// identifier ([A-Za-z0-9_]+) followed by ':'; the value follows the list()
+// element grammar via parseElem. It returns the entry and the index past it.
+func parseEntry(toks []token, i int) (MapEntry, int, *ParseError) {
+	key := toks[i]
+	if key.kind != tkIdent || !isMapKey(key.text) {
+		return MapEntry{}, 0, errAt(key, Syntax, "map key must be a bare identifier")
+	}
+	if i+1 >= len(toks) || toks[i+1].kind != tkColon {
+		return MapEntry{}, 0, errAt(key, Syntax, "map key %q must be followed by ':'", key.text)
+	}
+	if i+2 >= len(toks) || toks[i+2].kind == tkComma || toks[i+2].kind == tkRParen {
+		return MapEntry{}, 0, errAt(key, Syntax, "map key %q has no value", key.text)
+	}
+	val, next, err := parseElem(toks, i+2)
+	if err != nil {
+		return MapEntry{}, 0, err
+	}
+	return MapEntry{Key: key.text, Val: val}, next, nil
+}
+
+// isMapKey reports whether s is a bare map-key identifier: [A-Za-z0-9_]+ (§2.6).
+func isMapKey(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if !isAlnum(s[i]) && s[i] != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 // parseParallel parses "parallel { dispatches } [each -> { ... }]" (§6.1).

@@ -227,7 +227,8 @@ func checkFlags(op *registry.Operation, opName string, d *ann.Dispatch) error {
 }
 
 func excludedFlag(name, value, opName string) bool {
-	return name == "id" || name == "timeout" || (name == opName && value == "")
+	return name == "id" || name == "timeout" || name == "retry" || name == "backoff" ||
+		(name == opName && value == "")
 }
 
 // populateFields fills declared context fields (other than text) from

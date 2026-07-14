@@ -15,7 +15,7 @@ type Program struct{ Statements []Stmt }
 type Stmt interface{ stmt() }
 
 // Expr is the sealed expression interface for binding right-hand sides,
-// implemented by *Dispatch, StrLit, ListLit and *Concat.
+// implemented by *Dispatch, StrLit, ListLit, *Concat and MapLit.
 type Expr interface{ expr() }
 
 // Status identifies a trinary handler key (§2.2).
@@ -134,9 +134,9 @@ type Concat struct {
 	Line int
 }
 
-// MapLit is a map() constructor (§2.6, v0.3). The type is declared here so Elem
-// can carry a nested map and the reference walker stays generic; the parser for
-// map() itself is introduced in a later stage.
+// MapLit is a map() constructor (§2.6, v0.3): an ordered list of key/value
+// entries. Keys are bare identifiers; values share the element grammar of
+// list(). It is a binding right-hand side (Expr) and may nest inside Elem.Map.
 type MapLit struct {
 	Entries []MapEntry
 	Line    int
@@ -183,3 +183,4 @@ func (*Dispatch) expr() {}
 func (StrLit) expr()    {}
 func (ListLit) expr()   {}
 func (*Concat) expr()   {}
+func (MapLit) expr()    {}

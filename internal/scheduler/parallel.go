@@ -244,6 +244,10 @@ func exprRefs(e ann.Expr, fn func(string)) {
 		for _, el := range v.Args {
 			elemRefs(el, fn)
 		}
+	case ann.MapLit:
+		for _, en := range v.Entries {
+			elemRefs(en.Val, fn)
+		}
 	case ann.StrLit:
 		for _, m := range ram.RefToken.FindAllString(v.Value, -1) {
 			fn(refBase(m[1:]))
@@ -272,6 +276,9 @@ func elemRefs(e ann.Elem, fn func(string)) {
 // buildPrep completes preparation once the operation is selected.
 func (s *Scheduler) buildPrep(st *execState, d *ann.Dispatch, a *registry.Agent,
 	op *registry.Operation, opName, did string) (*preparedDispatch, *Escalation, bool) {
+	if err := checkRetryFlags(d, a); err != nil {
+		return s.predispatch(err, d, opName, did)
+	}
 	res, err := dispatch.ResolveFlags(a, op, opName, d)
 	if err != nil {
 		return s.predispatch(err, d, opName, did)
@@ -336,8 +343,96 @@ func timeoutFlag(d *ann.Dispatch) int {
 	return n
 }
 
-// invoke runs the prepared dispatch with a single corrective retry (R10).
+// numFlag parses a non-negative integer directive flag (--retry, --backoff):
+// absent or empty → 0, non-integer or negative → -1 (treated like an invalid
+// --timeout: a Class A pre-dispatch skip).
+func numFlag(d *ann.Dispatch, name string) int {
+	v, ok := d.Flags[name]
+	if !ok || v == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return -1
+	}
+	return n
+}
+
+// retryFlag is the number of declarative retries requested via --retry (R12).
+func retryFlag(d *ann.Dispatch) int { return numFlag(d, "retry") }
+
+// backoffFlag is the per-attempt backoff multiplier in seconds via --backoff (R13).
+func backoffFlag(d *ann.Dispatch) int { return numFlag(d, "backoff") }
+
+// checkRetryFlags validates the declarative retry directives before any spawn
+// (R14). A non-numeric or negative value is a Class A skip (same treatment as an
+// invalid --timeout). --retry on an executor is a Class B stop: an executor has
+// already applied its side effects, so re-executing it would double-apply them —
+// the corrective-retry doctrine keeps executors read-only, never re-run.
+func checkRetryFlags(d *ann.Dispatch, a *registry.Agent) error {
+	if retryFlag(d) < 0 || backoffFlag(d) < 0 {
+		return &dispatch.PreDispatchError{Class: 'A', Msg: "--retry/--backoff must be a non-negative integer"}
+	}
+	if retryFlag(d) > 0 && a.Scope == "executor" {
+		return &dispatch.PreDispatchError{Class: 'B', Msg: "--retry is not allowed on an executor: re-executing it would double-apply its side effects (the corrective retry already runs read-only)"}
+	}
+	return nil
+}
+
+// retryable reports whether an attempt's result warrants a declarative retry
+// (R12): a recoverable error envelope, which includes the synthesized §4.3
+// timeout envelope. Success and info results never retry.
+func retryable(env *envelope.Envelope) bool {
+	if env == nil || env.Status != envelope.StatusError {
+		return false
+	}
+	m, ok := env.Payload.(map[string]any)
+	if !ok {
+		return false
+	}
+	rec, _ := m["recoverable"].(bool)
+	return rec
+}
+
+// backoffWait pauses backoff*n seconds before declarative retry n, through the
+// injectable sleep so tests observe the schedule with no real time passing.
+// Without --backoff (backoff==0) there is no wait.
+func (s *Scheduler) backoffWait(backoff, n int) {
+	if backoff <= 0 {
+		return
+	}
+	d := time.Duration(backoff*n) * time.Second
+	if s.sleep != nil {
+		s.sleep(d)
+		return
+	}
+	time.Sleep(d)
+}
+
+// invoke runs the prepared dispatch through the declarative retry loop (R12):
+// up to 1+N complete attempts, N being --retry. Each attempt is a full
+// invokeOnce (its own R10 corrective retry included), so a corrective retry
+// never consumes a declarative one. A further attempt fires only when the
+// previous result is retryable (recoverable error or timeout), after a
+// backoff*attempt pause. When the retries are exhausted the last error envelope
+// flows on unchanged — catchable by an error -> {} handler, not a fatal Class B.
 func (s *Scheduler) invoke(prep *preparedDispatch, strict bool) (*envelope.Envelope, *Escalation) {
+	retries := retryFlag(prep.d)
+	backoff := backoffFlag(prep.d)
+	for attempt := 0; ; attempt++ {
+		env, esc := s.invokeOnce(prep, strict)
+		if esc != nil {
+			return nil, esc
+		}
+		if attempt >= retries || !retryable(env) {
+			return env, nil
+		}
+		s.backoffWait(backoff, attempt+1)
+	}
+}
+
+// invokeOnce runs one complete attempt with a single corrective retry (R10).
+func (s *Scheduler) invokeOnce(prep *preparedDispatch, strict bool) (*envelope.Envelope, *Escalation) {
 	env, viol, esc := s.spawnAttempt(prep, prep.prompt, strict, false)
 	if esc != nil {
 		return nil, esc

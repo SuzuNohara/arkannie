@@ -3,6 +3,7 @@ package scheduler
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"arkannie/internal/ann"
 	"arkannie/internal/checkpoint"
@@ -24,7 +25,8 @@ type Scheduler struct {
 	PersonalitiesDir string
 	InvokerCwd       string
 	Consent          spawn.Consent
-	Notices          []string // notify/clarify/Class A messages for the report
+	Notices          []string            // notify/clarify/Class A messages for the report
+	sleep            func(time.Duration) // backoff pause (R13); default time.Sleep, replaced in tests
 }
 
 // RunResult is the aggregated outcome of a program run.
@@ -41,6 +43,7 @@ func New(reg *registry.Registry, cfg *config.Config, sp spawn.Spawner,
 		Reg: reg, Cfg: cfg, Sp: sp,
 		MemDir: memDir, PersonalitiesDir: personalitiesDir,
 		InvokerCwd: invokerCwd, Consent: consent,
+		sleep: time.Sleep,
 	}
 }
 
@@ -331,6 +334,9 @@ func (s *Scheduler) execAssign(st *execState, as *ann.Assign) *Escalation {
 		return nil
 	case ann.ListLit:
 		_ = st.ram.Set(as.Name, s.listValue(st, e)) // name validated at parse
+		return nil
+	case ann.MapLit:
+		_ = st.ram.Set(as.Name, s.mapValue(st, e)) // name validated at parse
 		return nil
 	case *ann.Concat:
 		_ = st.ram.Set(as.Name, s.concatValue(st, e)) // name validated at parse
