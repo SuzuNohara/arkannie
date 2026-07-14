@@ -78,7 +78,7 @@ func installLayerAgent(t *testing.T, app *App) string {
 func writeLayerProg(t *testing.T, app *App) string {
 	t.Helper()
 	prog := filepath.Join(app.Root, "layer.ann")
-	mustWrite(t, prog, "# ann v0.2\n[nova]: hola\n")
+	mustWrite(t, prog, "# ann v0.3\n[nova]: hola\n")
 	return prog
 }
 

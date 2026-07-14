@@ -1,4 +1,4 @@
-# ann v0.2
+# ann v0.3
 // E2E-parallel: two concurrent dispatches, both routed through each -> {}.
 parallel {
   [echo] --id=a : x

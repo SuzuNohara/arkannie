@@ -1,4 +1,4 @@
-# ann v0.2
+# ann v0.3
 // Recomposition of nova [implement]: iterate task-cluster briefs, building each
 // via nova-build (the RED-GREEN-REFACTOR worker). The wave state (the briefs) is
 // externalized into a list; nova's wave scheduling + reviewer loop collapse to a

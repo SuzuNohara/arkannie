@@ -224,10 +224,10 @@ func (lx *lineLexer) errf(col int, format string, args ...any) *ParseError {
 	return &ParseError{Line: lx.line, Col: col, Category: Syntax, Msg: fmt.Sprintf(format, args...)}
 }
 
-const versionHeader = "# ann v0.2"
+const versionHeader = "# ann v0.3"
 
 // checkHeader enforces §1.0: in ProgramMode the first non-comment line must
-// be exactly "# ann v0.2" at column 0. In PromptMode a leading header line
+// be exactly "# ann v0.3" at column 0. In PromptMode a leading header line
 // is optional and silently ignored. It returns the index of the first line
 // to parse.
 func checkHeader(lines []string, mode Mode) (int, *ParseError) {

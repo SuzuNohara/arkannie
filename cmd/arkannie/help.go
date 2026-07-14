@@ -11,10 +11,10 @@ func printHelp(w io.Writer) {
 	fmt.Fprint(w, annHelp)
 }
 
-// annHelp is a self-contained tutorial for the Ann v0.2 command language and
+// annHelp is a self-contained tutorial for the Ann v0.3 command language and
 // the arkannie CLI. Code examples are shown indented (no fences) so the whole
 // text fits in one Go raw string.
-const annHelp = `arkannie — stateless AI agent harness · Ann language tutorial (v0.2)
+const annHelp = `arkannie — stateless AI agent harness · Ann language tutorial (v0.3)
 
 WHAT IS ANN
   Ann is a small dispatch language, not a general-purpose one. A program
@@ -66,7 +66,7 @@ RUNNING
 
 PROGRAM STRUCTURE
   A .ann file must begin with the version header on line 1 (column 0):
-    # ann v0.2
+    # ann v0.3
   Line comments use //. There are no block comments.
 
 DISPATCH — the command atom
@@ -150,7 +150,7 @@ CONDITIONALS (if / else)
 MULTIPLE AGENTS IN ONE PROGRAM
   A single .ann may dispatch different agents — just name them. Each [command]
   resolves to its own registered agent under .agents/:
-    # ann v0.2
+    # ann v0.3
     $a = [researcher] : gather sources
     $b = [summarizer] : condense $a
     [return] --id=research $a

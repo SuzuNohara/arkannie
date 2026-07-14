@@ -1,4 +1,4 @@
-# ann v0.2
+# ann v0.3
 // E2E-seq: two dispatches chained by a binding. The second dispatch receives
 // the payload the first produced, so its echo carries the first result too.
 // The chained result is emitted explicitly via [return].

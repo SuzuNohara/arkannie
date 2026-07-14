@@ -1,4 +1,4 @@
-# ann v0.2
+# ann v0.3
 // E2E-info: the wave returns status info with a missing_field question. Arkannie
 // always surfaces it (§2.7.1) and the program exits 2.
 [echo] --id=q : necesito el tipo

@@ -54,7 +54,7 @@ func (a *App) Run(argv []string) int {
 		return 64
 	}
 	if args.version {
-		fmt.Fprintf(a.Stdout, "arkannie %s (Ann v0.2)\n", version)
+		fmt.Fprintf(a.Stdout, "arkannie %s (Ann v0.3)\n", version)
 		return 0
 	}
 	if args.help {

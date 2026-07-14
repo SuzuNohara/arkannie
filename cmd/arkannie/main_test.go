@@ -254,7 +254,7 @@ func TestCLI(t *testing.T) {
 	t.Run("U13-T2_existing_ann_is_program_mode", func(t *testing.T) {
 		app, out, _ := newTestApp(t, &stubSpawner{})
 		prog := filepath.Join(app.Root, "p.ann")
-		mustWrite(t, prog, "# ann v0.2\n[echo]: hi from program\n")
+		mustWrite(t, prog, "# ann v0.3\n[echo]: hi from program\n")
 		code := app.Run([]string{"--agent=echo", "--id=t", prog})
 		if code != 0 {
 			t.Fatalf("want exit 0, got %d", code)
@@ -534,7 +534,7 @@ func TestInterpret(t *testing.T) {
 		ce := &countingExec{}
 		app.Exec = ce.fn
 		prog := filepath.Join(app.Root, "bad.ann")
-		mustWrite(t, prog, "# ann v0.2\nif something {\n")
+		mustWrite(t, prog, "# ann v0.3\nif something {\n")
 		code := app.Run([]string{"--agent=echo", "--id=t", prog})
 		if code != 1 {
 			t.Fatalf("parse error should be error output exit 1, got %d", code)
@@ -551,11 +551,11 @@ func TestInterpret(t *testing.T) {
 	t.Run("U15-T1_interpret_fixed_reparses_and_runs", func(t *testing.T) {
 		sp := &stubSpawner{}
 		app, out, _ := newTestApp(t, sp)
-		fixed := "```ann\n# ann v0.2\n[echo]: repaired\n```"
+		fixed := "```ann\n# ann v0.3\n[echo]: repaired\n```"
 		ce := &countingExec{reply: fixed}
 		app.Exec = ce.fn
 		prog := filepath.Join(app.Root, "bad.ann")
-		mustWrite(t, prog, "# ann v0.2\nif something {\n")
+		mustWrite(t, prog, "# ann v0.3\nif something {\n")
 		code := app.Run([]string{"--agent=echo", "--id=t", "--interpret", prog})
 		if code != 0 {
 			t.Fatalf("repaired program should run and exit 0, got %d", code)
@@ -574,11 +574,11 @@ func TestInterpret(t *testing.T) {
 	t.Run("U15-T1b_corrected_program_in_output", func(t *testing.T) {
 		sp := &stubSpawner{}
 		app, out, _ := newTestApp(t, sp)
-		fixed := "```ann\n# ann v0.2\n[echo]: repaired verbatim\n```"
+		fixed := "```ann\n# ann v0.3\n[echo]: repaired verbatim\n```"
 		ce := &countingExec{reply: fixed}
 		app.Exec = ce.fn
 		prog := filepath.Join(app.Root, "bad.ann")
-		mustWrite(t, prog, "# ann v0.2\nif something {\n")
+		mustWrite(t, prog, "# ann v0.3\nif something {\n")
 		code := app.Run([]string{"--agent=echo", "--id=t", "--interpret", prog})
 		if code != 0 {
 			t.Fatalf("repaired program should run and exit 0, got %d", code)
@@ -589,7 +589,7 @@ func TestInterpret(t *testing.T) {
 		if !strings.Contains(body, "Programa corregido por el intérprete") {
 			t.Fatalf("output body should carry the corrected-program header:\n%s", body)
 		}
-		if !strings.Contains(body, "# ann v0.2\n[echo]: repaired verbatim") {
+		if !strings.Contains(body, "# ann v0.3\n[echo]: repaired verbatim") {
 			t.Fatalf("output body should contain the corrected program verbatim:\n%s", body)
 		}
 		if !strings.Contains(body, "status: success") {
@@ -655,7 +655,7 @@ func TestHelp(t *testing.T) {
 		t.Fatalf("--help should exit 0, got %d", code)
 	}
 	h := out.String()
-	for _, marker := range []string{"# ann v0.2", "[return]", "parallel", "--id"} {
+	for _, marker := range []string{"# ann v0.3", "[return]", "parallel", "--id"} {
 		if !strings.Contains(h, marker) {
 			t.Fatalf("help missing %q:\n%s", marker, h)
 		}
@@ -688,6 +688,12 @@ func TestHelpDocumentsV02Constructs(t *testing.T) {
 	if strings.Contains(h, "v0.1") {
 		t.Errorf("tutorial still references v0.1")
 	}
+	if !strings.Contains(h, "# ann v0.3") {
+		t.Errorf("tutorial should show the current v0.3 version header")
+	}
+	if strings.Contains(h, "# ann v0.2") {
+		t.Errorf("tutorial still shows a stale v0.2 version header")
+	}
 }
 
 func TestIDRequired(t *testing.T) {
@@ -705,7 +711,7 @@ func TestMultiAgentProgram(t *testing.T) {
 	app, out, _ := newTestApp(t, &stubSpawner{})
 	writeAgent(t, filepath.Join(app.Root, ".agents"), "echo2", echo2YAML)
 	prog := filepath.Join(app.Root, "multi.ann")
-	mustWrite(t, prog, "# ann v0.2\n$a = [echo] : one\n$b = [echo2] : two\n[return] --id=r1 $a\n[return] --id=r2 $b\n")
+	mustWrite(t, prog, "# ann v0.3\n$a = [echo] : one\n$b = [echo2] : two\n[return] --id=r1 $a\n[return] --id=r2 $b\n")
 	// No --agent: each dispatch resolves its own agent from the registry.
 	code := app.Run([]string{"--id=demo", prog})
 	if code != 0 {

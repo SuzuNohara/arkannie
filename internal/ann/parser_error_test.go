@@ -6,7 +6,7 @@ import (
 )
 
 func TestVersionMismatch(t *testing.T) {
-	t.Run("U2-T10_wrong_version", func(t *testing.T) {
+	t.Run("U2-T10_wrong_version_v01", func(t *testing.T) {
 		err := mustFail(t, string(readTestdata(t, "version_mismatch.ann")), ProgramMode, VersionMismatch)
 		if err.Line != 1 {
 			t.Errorf("line = %d, want 1", err.Line)
@@ -15,8 +15,18 @@ func TestVersionMismatch(t *testing.T) {
 			t.Errorf("class = %c, want B", err.Class())
 		}
 	})
+	t.Run("U2-T10_wrong_version_v02", func(t *testing.T) {
+		// v0.3 must reject the immediately-previous version too, not only v0.1.
+		err := mustFail(t, "# ann v0.2\n[seeker] auth\n", ProgramMode, VersionMismatch)
+		if err.Line != 1 {
+			t.Errorf("line = %d, want 1", err.Line)
+		}
+		if err.Class() != 'B' {
+			t.Errorf("class = %c, want B", err.Class())
+		}
+	})
 	t.Run("U2-T10_header_not_col0", func(t *testing.T) {
-		mustFail(t, " # ann v0.2\n[seeker] auth\n", ProgramMode, VersionMismatch)
+		mustFail(t, " # ann v0.3\n[seeker] auth\n", ProgramMode, VersionMismatch)
 	})
 	t.Run("U2-T10_header_absent", func(t *testing.T) {
 		mustFail(t, "[seeker] auth\n", ProgramMode, VersionMismatch)

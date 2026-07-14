@@ -1,4 +1,4 @@
-# ann v0.2
+# ann v0.3
 // all supported constructs §8
 
 [seeker] auth --verbose --depth=full

@@ -33,7 +33,7 @@ func assertNoSideEffects(t *testing.T, root string) {
 func TestCheckValidProgram(t *testing.T) {
 	sp := &stubSpawner{}
 	app, out, errb := newTestApp(t, sp)
-	prog := writeCheckProg(t, app.Root, "ok.ann", "# ann v0.2\n[echo]: hi from program\n")
+	prog := writeCheckProg(t, app.Root, "ok.ann", "# ann v0.3\n[echo]: hi from program\n")
 
 	code := app.Run([]string{"--check", prog})
 
@@ -58,7 +58,7 @@ func TestCheckValidProgram(t *testing.T) {
 func TestCheckParseError(t *testing.T) {
 	sp := &stubSpawner{}
 	app, out, errb := newTestApp(t, sp)
-	prog := writeCheckProg(t, app.Root, "bad.ann", "# ann v0.2\nif something {\n")
+	prog := writeCheckProg(t, app.Root, "bad.ann", "# ann v0.3\nif something {\n")
 
 	code := app.Run([]string{"--check", prog})
 
