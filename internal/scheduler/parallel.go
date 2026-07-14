@@ -238,14 +238,34 @@ func exprRefs(e ann.Expr, fn func(string)) {
 		dispatchRefs(v, fn)
 	case ann.ListLit:
 		for _, el := range v.Elems {
-			if strings.HasPrefix(el, "$") {
-				fn(refBase(el[1:]))
-			}
+			elemRefs(el, fn)
+		}
+	case *ann.Concat:
+		for _, el := range v.Args {
+			elemRefs(el, fn)
 		}
 	case ann.StrLit:
 		for _, m := range ram.RefToken.FindAllString(v.Value, -1) {
 			fn(refBase(m[1:]))
 		}
+	}
+}
+
+// elemRefs visits the base binding of a list/concat element, recursing into
+// nested list()/map() constructors so no reference is missed (checkpoint
+// tracking must see every dependency — restricción crítica #2).
+func elemRefs(e ann.Elem, fn func(string)) {
+	switch {
+	case e.List != nil:
+		for _, el := range e.List.Elems {
+			elemRefs(el, fn)
+		}
+	case e.Map != nil:
+		for _, ent := range e.Map.Entries {
+			elemRefs(ent.Val, fn)
+		}
+	case e.IsRef:
+		fn(refBase(e.Str))
 	}
 }
 

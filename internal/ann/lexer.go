@@ -23,6 +23,7 @@ const (
 	tkComma                      // ,
 	tkRParen                     // )
 	tkListOpen                   // list(
+	tkConcatOpen                 // concat(
 	tkContext                    // single-line context text after ": " (verbatim)
 	tkContextOpen                // ":" at end of line — multi-line context follows
 )
@@ -126,16 +127,52 @@ func (lx *lineLexer) lexCommand(col int) (token, bool, *ParseError) {
 	return token{kind: tkCommand, text: name, line: lx.line, col: col}, false, nil
 }
 
-// lexString reads a quoted string. Content is verbatim: {{ }} slots, $refs
-// and // sequences inside strings are preserved untouched (§2.5).
+// lexString reads a quoted string (§2.5, §quoting). {{ }} slots, $refs and //
+// sequences stay verbatim; a backslash introduces an escape: \" is a literal
+// quote, \\ a literal backslash, and \$ is kept verbatim so the interpolation
+// escape pass (ram.EscapePlaceholder) can later mask it. Any other \X is a
+// lexical error at its column.
 func (lx *lineLexer) lexString(col int) (token, bool, *ParseError) {
-	rest := lx.src[lx.pos+1:]
-	end := strings.IndexByte(rest, '"')
-	if end < 0 {
-		return token{}, false, lx.errf(col, "unterminated string literal")
+	var b strings.Builder
+	i := lx.pos + 1
+	for i < len(lx.src) {
+		c := lx.src[i]
+		if c == '"' {
+			lx.pos = i + 1
+			return token{kind: tkString, text: b.String(), line: lx.line, col: col}, false, nil
+		}
+		if c == '\\' {
+			n, err := lx.appendEscape(&b, i)
+			if err != nil {
+				return token{}, false, err
+			}
+			i += n
+			continue
+		}
+		b.WriteByte(c)
+		i++
 	}
-	lx.pos += end + 2
-	return token{kind: tkString, text: rest[:end], line: lx.line, col: col}, false, nil
+	return token{}, false, lx.errf(col, "unterminated string literal")
+}
+
+// appendEscape processes a backslash escape starting at src[i] and reports how
+// many source bytes it consumed. \$ keeps both bytes verbatim; a trailing or
+// unknown escape is a lexical error at the backslash column.
+func (lx *lineLexer) appendEscape(b *strings.Builder, i int) (int, *ParseError) {
+	if i+1 >= len(lx.src) {
+		return 0, lx.errf(i+1, "dangling backslash at end of string literal")
+	}
+	switch lx.src[i+1] {
+	case '"':
+		b.WriteByte('"')
+	case '\\':
+		b.WriteByte('\\')
+	case '$':
+		b.WriteString(`\$`)
+	default:
+		return 0, lx.errf(i+1, "invalid escape \\%c in string literal", lx.src[i+1])
+	}
+	return 2, nil
 }
 
 // lexBinding reads $name: alphanumeric plus '_' (§2.3).
@@ -193,7 +230,9 @@ func (lx *lineLexer) lexContext(col int) (token, bool, *ParseError) {
 }
 
 // lexWord reads a bare word: letters, digits, '_', '-', '.', '/'.
-// "list(" is recognized as the list constructor opener (§2.6).
+// "list(" and "concat(" are recognized as constructor openers (§2.6); the
+// words alone (not immediately followed by '(') stay ordinary identifiers, so
+// "concat"/"list" remain free text as args or inside context.
 func (lx *lineLexer) lexWord(col int) (token, bool, *ParseError) {
 	i := lx.pos
 	for i < len(lx.src) && isWordChar(lx.src[i]) {
@@ -207,11 +246,24 @@ func (lx *lineLexer) lexWord(col int) (token, bool, *ParseError) {
 	}
 	word := lx.src[lx.pos:i]
 	lx.pos = i
-	if word == "list" && lx.pos < len(lx.src) && lx.src[lx.pos] == '(' {
+	if kind, ok := constructorOpen(word); ok && lx.pos < len(lx.src) && lx.src[lx.pos] == '(' {
 		lx.pos++
-		return token{kind: tkListOpen, text: word, line: lx.line, col: col}, false, nil
+		return token{kind: kind, text: word, line: lx.line, col: col}, false, nil
 	}
 	return token{kind: tkIdent, text: word, line: lx.line, col: col}, false, nil
+}
+
+// constructorOpen maps a word to its fused constructor-opener token kind when
+// the word is immediately followed by '('.
+func constructorOpen(word string) (tokKind, bool) {
+	switch word {
+	case "list":
+		return tkListOpen, true
+	case "concat":
+		return tkConcatOpen, true
+	default:
+		return 0, false
+	}
 }
 
 func (lx *lineLexer) skipSpaces() {
@@ -264,26 +316,49 @@ func nextContent(lines []string, i int) int {
 	return i
 }
 
-// collectContext gathers the indented lines of a multi-line context block
-// (§2.7) starting at pos. The block ends at a blank line (consumed) or at a
-// line that is not indented, closes a block, or contains a '->' handler
-// token. It returns the verbatim text and the next line index.
+// collectContext gathers the lines of a multi-line context block (§2.7,
+// §quoting) starting at pos. The first line sets the block's base indent; the
+// block ends at a line with LESS indentation (dedent), a '}' line, or a line
+// containing a '->' handler token. Internal blank lines are preserved as empty
+// lines; trailing blanks (separators before the next statement) are dropped.
+// Indentation is preserved relative to the base: only the common leading-space
+// prefix is cut, not each line individually. Returns the text and next index.
 func collectContext(lines []string, pos int) (string, int) {
+	base := -1
 	var parts []string
 	for pos < len(lines) {
 		raw := lines[pos]
-		trimmed := strings.TrimSpace(raw)
-		if trimmed == "" {
+		if strings.TrimSpace(raw) == "" {
+			if base < 0 {
+				pos++
+				break // a blank before any content: no multi-line context
+			}
+			parts = append(parts, "")
 			pos++
+			continue
+		}
+		indent := indentWidth(raw)
+		if base < 0 {
+			if indent == 0 {
+				break // first line not indented: no multi-line context
+			}
+			base = indent
+		}
+		if indent < base || strings.TrimSpace(raw) == "}" || strings.Contains(raw, "->") {
 			break
 		}
-		if !isIndented(raw) || trimmed == "}" || strings.Contains(raw, "->") {
-			break
-		}
-		parts = append(parts, trimmed)
+		parts = append(parts, raw[base:])
 		pos++
 	}
+	for len(parts) > 0 && parts[len(parts)-1] == "" {
+		parts = parts[:len(parts)-1]
+	}
 	return strings.Join(parts, "\n"), pos
+}
+
+// indentWidth counts the leading whitespace (spaces or tabs) of a line.
+func indentWidth(raw string) int {
+	return len(raw) - len(strings.TrimLeft(raw, " \t"))
 }
 
 // isHandlerLine reports whether the line starts one of the given handlers
@@ -307,10 +382,6 @@ func isElseLine(raw string) bool {
 		return false
 	}
 	return rest == "" || rest[0] == ' ' || rest[0] == '\t' || rest[0] == '{'
-}
-
-func isIndented(raw string) bool {
-	return raw != "" && (raw[0] == ' ' || raw[0] == '\t')
 }
 
 func isSpace(c byte) bool { return c == ' ' || c == '\t' }

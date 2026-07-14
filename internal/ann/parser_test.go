@@ -188,11 +188,11 @@ func TestBindings(t *testing.T) {
 		}
 		want := []string{"a", "$b", "c"}
 		if len(lst.Elems) != 3 {
-			t.Fatalf("elems = %q, want %q", lst.Elems, want)
+			t.Fatalf("elems = %d, want %q", len(lst.Elems), want)
 		}
 		for i := range want {
-			if lst.Elems[i] != want[i] {
-				t.Errorf("elems[%d] = %q, want %q", i, lst.Elems[i], want[i])
+			if elemSrc(lst.Elems[i]) != want[i] {
+				t.Errorf("elems[%d] = %q, want %q", i, elemSrc(lst.Elems[i]), want[i])
 			}
 		}
 	})
@@ -515,11 +515,11 @@ func TestDottedRefs(t *testing.T) {
 			Statements[0].(*Assign).Expr.(ListLit)
 		want := []string{"$x.a", "b", "$y.p.q"}
 		if len(lst.Elems) != len(want) {
-			t.Fatalf("elems = %q, want %q", lst.Elems, want)
+			t.Fatalf("elems = %d, want %q", len(lst.Elems), want)
 		}
 		for i := range want {
-			if lst.Elems[i] != want[i] {
-				t.Errorf("elems[%d] = %q, want %q", i, lst.Elems[i], want[i])
+			if elemSrc(lst.Elems[i]) != want[i] {
+				t.Errorf("elems[%d] = %q, want %q", i, elemSrc(lst.Elems[i]), want[i])
 			}
 		}
 	})

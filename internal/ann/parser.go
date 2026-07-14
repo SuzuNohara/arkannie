@@ -320,38 +320,94 @@ func (p *parser) parseExpr(toks []token) (Expr, *ParseError) {
 		return StrLit{Value: toks[0].text}, nil
 	case tkListOpen:
 		return parseList(toks)
+	case tkConcatOpen:
+		return parseConcat(toks)
 	default:
-		return nil, errAt(toks[0], Syntax, "expected [command], string literal or list() after '='")
+		return nil, errAt(toks[0], Syntax, "expected [command], string literal, list() or concat() after '='")
 	}
 }
 
-// parseList parses list("a", $b, ...) — strings or $refs only (§2.6).
+// parseList parses a top-level list(...) expression and rejects trailing
+// tokens. Elements are strings, $refs (with optional dot-path) or nested
+// list() constructors (§2.6, v0.3).
 func parseList(toks []token) (Expr, *ParseError) {
-	elems := []string{}
-	i := 1
+	ll, next, err := parseListAt(toks, 0)
+	if err != nil {
+		return nil, err
+	}
+	if next != len(toks) {
+		return nil, errAt(toks[next], Syntax, "unexpected tokens after list()")
+	}
+	return ll, nil
+}
+
+// parseConcat parses a top-level concat(...) expression and rejects trailing
+// tokens. Arguments share the element grammar of list(); concat() with no args
+// and a single argument are both valid (§2.6, v0.3).
+func parseConcat(toks []token) (Expr, *ParseError) {
+	args, next, err := parseElems(toks, 1, toks[0], "concat")
+	if err != nil {
+		return nil, err
+	}
+	if next != len(toks) {
+		return nil, errAt(toks[next], Syntax, "unexpected tokens after concat()")
+	}
+	return &Concat{Args: args, Line: toks[0].line}, nil
+}
+
+// parseListAt parses a list(...) starting at toks[i] (a tkListOpen). It returns
+// the ListLit and the index just past the closing ')'.
+func parseListAt(toks []token, i int) (ListLit, int, *ParseError) {
+	open := toks[i]
+	elems, next, err := parseElems(toks, i+1, open, "list")
+	if err != nil {
+		return ListLit{}, 0, err
+	}
+	return ListLit{Elems: elems, Line: open.line}, next, nil
+}
+
+// parseElems parses comma-separated elements from toks[i] until the closing
+// ')'. opener anchors the "unclosed" error and name labels it. It returns the
+// elements and the index just past ')'.
+func parseElems(toks []token, i int, opener token, name string) ([]Elem, int, *ParseError) {
+	elems := []Elem{}
 	for i < len(toks) && toks[i].kind != tkRParen {
-		switch toks[i].kind {
-		case tkString:
-			elems = append(elems, toks[i].text)
-			i++
-		case tkBinding:
-			var path string
-			path, i = refPath(toks, i)
-			elems = append(elems, "$"+path)
-		default:
-			return nil, errAt(toks[i], Syntax, "list elements must be string literals or $bindings")
+		e, next, err := parseElem(toks, i)
+		if err != nil {
+			return nil, 0, err
 		}
+		elems = append(elems, e)
+		i = next
 		if i < len(toks) && toks[i].kind == tkComma {
 			i++
 		}
 	}
 	if i >= len(toks) {
-		return nil, errAt(toks[0], Syntax, "unclosed list()")
+		return nil, 0, errAt(opener, Syntax, "unclosed %s()", name)
 	}
-	if i != len(toks)-1 {
-		return nil, errAt(toks[i+1], Syntax, "unexpected tokens after list()")
+	return elems, i + 1, nil
+}
+
+// parseElem parses one list/concat element at toks[i]: a string literal, a $ref
+// (with optional dot-path), or a nested list() constructor. It returns the
+// element and the index just past it.
+func parseElem(toks []token, i int) (Elem, int, *ParseError) {
+	switch toks[i].kind {
+	case tkString:
+		return Elem{Str: toks[i].text}, i + 1, nil
+	case tkBinding:
+		path, next := refPath(toks, i)
+		return Elem{IsRef: true, Str: path}, next, nil
+	case tkListOpen:
+		ll, next, err := parseListAt(toks, i)
+		if err != nil {
+			return Elem{}, 0, err
+		}
+		return Elem{List: &ll}, next, nil
+	default:
+		return Elem{}, 0, errAt(toks[i], Syntax,
+			"list elements must be string literals, $bindings or nested list()")
 	}
-	return ListLit{Elems: elems}, nil
 }
 
 // parseParallel parses "parallel { dispatches } [each -> { ... }]" (§6.1).

@@ -200,6 +200,7 @@ func (s *Scheduler) execKeyword(st *execState, d *ann.Dispatch) {
 	if text == "" && len(d.Args) > 0 {
 		text = strings.Join(d.Args, " ")
 	}
+	text = ram.Unescape(text)
 	switch d.Command {
 	case "ask-user":
 		st.report.WriteString("## Question\n\n" + text + "\n")
@@ -232,7 +233,7 @@ func (s *Scheduler) execReturn(st *execState, d *ann.Dispatch) {
 		}
 		val = v
 	} else {
-		val = ram.Value{Kind: ram.KString, Str: op}
+		val = ram.Value{Kind: ram.KString, Str: ram.Unescape(op)}
 	}
 	label := d.ID
 	if st.loopDepth > 0 {
@@ -326,10 +327,13 @@ func (s *Scheduler) infoDefault(st *execState, env *envelope.Envelope) {
 func (s *Scheduler) execAssign(st *execState, as *ann.Assign) *Escalation {
 	switch e := as.Expr.(type) {
 	case ann.StrLit:
-		_ = st.ram.Set(as.Name, ram.Value{Kind: ram.KString, Str: e.Value}) // name validated at parse
+		_ = st.ram.Set(as.Name, ram.Value{Kind: ram.KString, Str: ram.Unescape(e.Value)}) // name validated at parse
 		return nil
 	case ann.ListLit:
 		_ = st.ram.Set(as.Name, s.listValue(st, e)) // name validated at parse
+		return nil
+	case *ann.Concat:
+		_ = st.ram.Set(as.Name, s.concatValue(st, e)) // name validated at parse
 		return nil
 	case *ann.Dispatch:
 		return s.assignDispatch(st, as.Name, e)
@@ -338,21 +342,71 @@ func (s *Scheduler) execAssign(st *execState, as *ann.Assign) *Escalation {
 	}
 }
 
-// listValue resolves a list() literal, substituting $refs from RAM (§2.6).
+// listValue resolves a list() literal recursively (§2.6). Scalars stay strings,
+// nested list()/map() build nested composites, and $refs are resolved from RAM.
+// An unresolvable ref is a Class A notice and the element is OMITTED (v0.3: no
+// longer a silent empty string).
 func (s *Scheduler) listValue(st *execState, l ann.ListLit) ram.Value {
 	items := make([]ram.Value, 0, len(l.Elems))
 	for _, e := range l.Elems {
-		if strings.HasPrefix(e, "$") {
-			if v, ok := st.ram.Resolve(e[1:]); ok {
-				items = append(items, v)
-				continue
-			}
-			items = append(items, ram.Value{Kind: ram.KString})
-			continue
+		if v, ok := s.elemValue(st, e); ok {
+			items = append(items, v)
 		}
-		items = append(items, ram.Value{Kind: ram.KString, Str: e})
 	}
 	return ram.Value{Kind: ram.KList, List: items}
+}
+
+// concatValue evaluates a concat() into a single list, flattening exactly ONE
+// level: a list argument contributes its items, a non-list argument contributes
+// itself, and an unresolvable ref is a Class A notice + omission (§2.6, v0.3).
+func (s *Scheduler) concatValue(st *execState, c *ann.Concat) ram.Value {
+	items := []ram.Value{}
+	for _, e := range c.Args {
+		v, ok := s.elemValue(st, e)
+		if !ok {
+			continue
+		}
+		if v.Kind == ram.KList {
+			items = append(items, v.List...)
+			continue
+		}
+		items = append(items, v)
+	}
+	return ram.Value{Kind: ram.KList, List: items}
+}
+
+// elemValue evaluates one list/concat element. The bool is false when an
+// unresolvable $ref was found (a Class A notice is recorded and the caller
+// omits the element).
+func (s *Scheduler) elemValue(st *execState, e ann.Elem) (ram.Value, bool) {
+	switch {
+	case e.List != nil:
+		return s.listValue(st, *e.List), true
+	case e.Map != nil:
+		return s.mapValue(st, *e.Map), true
+	case e.IsRef:
+		v, ok := st.ram.Resolve(e.Str)
+		if !ok {
+			s.Notices = append(s.Notices,
+				fmt.Sprintf("[class A] $%s: unbound binding in list/concat — element omitted", e.Str))
+			return ram.Value{}, false
+		}
+		return v, true
+	default:
+		return ram.Value{Kind: ram.KString, Str: ram.Unescape(e.Str)}, true
+	}
+}
+
+// mapValue evaluates a map() literal into a KMap. Entries whose value is an
+// unresolvable $ref are omitted (Class A), mirroring listValue (§2.6, v0.3).
+func (s *Scheduler) mapValue(st *execState, m ann.MapLit) ram.Value {
+	out := make(map[string]ram.Value, len(m.Entries))
+	for _, e := range m.Entries {
+		if v, ok := s.elemValue(st, e.Val); ok {
+			out[e.Key] = v
+		}
+	}
+	return ram.Value{Kind: ram.KMap, Map: out}
 }
 
 // assignDispatch stores a success payload as the binding (§2.3); an error

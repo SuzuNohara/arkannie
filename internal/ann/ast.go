@@ -15,7 +15,7 @@ type Program struct{ Statements []Stmt }
 type Stmt interface{ stmt() }
 
 // Expr is the sealed expression interface for binding right-hand sides,
-// implemented by *Dispatch, StrLit and ListLit.
+// implemented by *Dispatch, StrLit, ListLit and *Concat.
 type Expr interface{ expr() }
 
 // Status identifies a trinary handler key (§2.2).
@@ -107,9 +107,46 @@ type If struct {
 // are kept verbatim — the parser never resolves templates (§2.5).
 type StrLit struct{ Value string }
 
-// ListLit is a list() constructor (§2.6). Elements are literal strings or
-// $refs (kept with their $ prefix).
-type ListLit struct{ Elems []string }
+// Elem is one element of a list() or concat() constructor (§2.6, v0.3). It is
+// exactly one of: a $ref path (IsRef, Str holds the path without the $ prefix,
+// e.g. "x.a"), a nested list() (List), a nested map() (Map), or a verbatim
+// string literal (Str, IsRef false, List/Map nil).
+type Elem struct {
+	Str   string
+	IsRef bool
+	List  *ListLit
+	Map   *MapLit
+}
+
+// ListLit is a list() constructor (§2.6). Elements are strings, $refs, or
+// nested list()/map() constructors.
+type ListLit struct {
+	Elems []Elem
+	Line  int
+}
+
+// Concat is a concat(...) constructor (§2.6, v0.3): it appends its arguments
+// into a single list, flattening exactly one level (a list argument contributes
+// its items; a non-list argument contributes itself). Its arguments share the
+// element grammar of list().
+type Concat struct {
+	Args []Elem
+	Line int
+}
+
+// MapLit is a map() constructor (§2.6, v0.3). The type is declared here so Elem
+// can carry a nested map and the reference walker stays generic; the parser for
+// map() itself is introduced in a later stage.
+type MapLit struct {
+	Entries []MapEntry
+	Line    int
+}
+
+// MapEntry is one key/value pair of a MapLit; Val follows the element grammar.
+type MapEntry struct {
+	Key string
+	Val Elem
+}
 
 // keywords are reserved per §1.3 and cannot be used as binding names.
 var keywords = map[string]bool{
@@ -145,3 +182,4 @@ func (*If) stmt()       {}
 func (*Dispatch) expr() {}
 func (StrLit) expr()    {}
 func (ListLit) expr()   {}
+func (*Concat) expr()   {}

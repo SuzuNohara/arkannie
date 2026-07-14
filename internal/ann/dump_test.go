@@ -131,6 +131,10 @@ func dumpExpr(b *strings.Builder, e Expr, depth int) {
 		fmt.Fprintf(b, "StrLit %q\n", ex.Value)
 	case ListLit:
 		writeIndent(b, depth)
-		fmt.Fprintf(b, "ListLit %q\n", ex.Elems)
+		parts := make([]string, len(ex.Elems))
+		for i, el := range ex.Elems {
+			parts[i] = elemSrc(el)
+		}
+		fmt.Fprintf(b, "ListLit %q\n", parts)
 	}
 }

@@ -18,6 +18,31 @@ import (
 // with the leading `$` already stripped.
 var RefToken = regexp.MustCompile(`\$[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*`)
 
+// escSentinel masks an escaped `\$` while $ref interpolation runs. It carries
+// no `$`, so RefToken cannot match it, and uses NUL delimiters that never occur
+// in Ann source text. It lives beside RefToken because the mask and the matcher
+// must agree on what counts as a reference (§quoting).
+const escSentinel = "\x00ann-esc-dollar\x00"
+
+// EscapePlaceholder masks every escaped `\$` in s so RefToken skips it during
+// interpolation. It is the first half of the single-pass escape used by every
+// RefToken consumer; call RestoreEscapes on the resolved text afterwards.
+func EscapePlaceholder(s string) string {
+	return strings.ReplaceAll(s, `\$`, escSentinel)
+}
+
+// RestoreEscapes turns each masked `\$` back into a literal `$` once $ref
+// interpolation has completed. It is the inverse of EscapePlaceholder.
+func RestoreEscapes(s string) string {
+	return strings.ReplaceAll(s, escSentinel, "$")
+}
+
+// Unescape resolves `\$` to a literal `$` in text that never goes through
+// RefToken interpolation (string literals, list/map elements).
+func Unescape(s string) string {
+	return RestoreEscapes(EscapePlaceholder(s))
+}
+
 // Kind discriminates the shape of a Value.
 type Kind int
 

@@ -155,7 +155,8 @@ func BuildContextBlock(op *registry.Operation, opName string, d *ann.Dispatch, r
 func resolveBindings(text string, r *ram.RAM) (string, map[string]*yaml.Node, error) {
 	extras := map[string]*yaml.Node{}
 	var firstErr error
-	resolved := ram.RefToken.ReplaceAllStringFunc(text, func(tok string) string {
+	masked := ram.EscapePlaceholder(text)
+	resolved := ram.RefToken.ReplaceAllStringFunc(masked, func(tok string) string {
 		v, ok := r.Resolve(tok[1:])
 		if !ok {
 			if firstErr == nil {
@@ -173,7 +174,7 @@ func resolveBindings(text string, r *ram.RAM) (string, map[string]*yaml.Node, er
 	if firstErr != nil {
 		return "", nil, firstErr
 	}
-	return resolved, extras, nil
+	return ram.RestoreEscapes(resolved), extras, nil
 }
 
 // lastSegment returns the final dotted segment of a path — the field name that
