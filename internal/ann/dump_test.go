@@ -35,6 +35,8 @@ func dumpStmt(b *strings.Builder, s Stmt, depth int) {
 		dumpExpr(b, st.Expr, depth+1)
 	case *Parallel:
 		dumpParallel(b, st, depth)
+	case *ParallelForeach:
+		dumpParallelForeach(b, st, depth)
 	case *Foreach:
 		writeIndent(b, depth)
 		fmt.Fprintf(b, "Foreach line=%d list=$%s\n", st.Line, st.List)
@@ -84,6 +86,17 @@ func dumpParallel(b *strings.Builder, st *Parallel, depth int) {
 	for i := range st.Dispatches {
 		dumpDispatch(b, &st.Dispatches[i], depth+1)
 	}
+	if st.Each != nil {
+		writeIndent(b, depth+1)
+		b.WriteString("Each\n")
+		dumpStmts(b, st.Each, depth+2)
+	}
+}
+
+func dumpParallelForeach(b *strings.Builder, st *ParallelForeach, depth int) {
+	writeIndent(b, depth)
+	fmt.Fprintf(b, "ParallelForeach line=%d list=$%s base=%s\n", st.Line, st.List, st.BaseID)
+	dumpDispatch(b, &st.Template, depth+1)
 	if st.Each != nil {
 		writeIndent(b, depth+1)
 		b.WriteString("Each\n")

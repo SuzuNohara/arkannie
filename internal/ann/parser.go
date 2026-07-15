@@ -37,7 +37,103 @@ func Parse(src []byte, mode Mode) (*Program, *ParseError) {
 	if err := validateReturns(stmts); err != nil {
 		return nil, err
 	}
+	if err := validateFanoutPrefixes(stmts); err != nil {
+		return nil, err
+	}
 	return &Program{Statements: stmts}, nil
+}
+
+// fanoutBase records a fan-out id prefix and the line that reserved it.
+type fanoutBase struct {
+	base string
+	line int
+}
+
+// litID records a literal dispatch --id and its line.
+type litID struct {
+	id   string
+	line int
+}
+
+// validateFanoutPrefixes enforces R13: every parallel foreach reserves the prefix
+// "<base>-", so no literal dispatch --id anywhere in the program (top-level, in
+// handlers, or inside a static parallel {}) may match ^<base>-[0-9]+$. [return]
+// ids are output labels, not dispatch ids, and never collide.
+func validateFanoutPrefixes(stmts []Stmt) *ParseError {
+	var bases []fanoutBase
+	var lits []litID
+	collectFanoutIDs(stmts, &bases, &lits)
+	for _, l := range lits {
+		for _, b := range bases {
+			if matchesReservedPrefix(l.id, b.base) {
+				return perrf(l.line, 1, Syntax,
+					"dispatch --id=%s collides with the reserved prefix %q of the parallel foreach at line %d",
+					l.id, b.base+"-", b.line)
+			}
+		}
+	}
+	return nil
+}
+
+// collectFanoutIDs walks the AST gathering fan-out bases and literal dispatch
+// ids. [return] statements and the fan-out template (which carries no id) are
+// excluded from the literal-id set.
+func collectFanoutIDs(stmts []Stmt, bases *[]fanoutBase, lits *[]litID) {
+	for _, st := range stmts {
+		switch v := st.(type) {
+		case *Dispatch:
+			addLitID(v, lits)
+			for _, body := range v.Handlers {
+				collectFanoutIDs(body, bases, lits)
+			}
+		case *Assign:
+			if d, ok := v.Expr.(*Dispatch); ok {
+				addLitID(d, lits)
+				for _, body := range d.Handlers {
+					collectFanoutIDs(body, bases, lits)
+				}
+			}
+		case *Parallel:
+			for i := range v.Dispatches {
+				addLitID(&v.Dispatches[i], lits)
+			}
+			collectFanoutIDs(v.Each, bases, lits)
+		case *ParallelForeach:
+			*bases = append(*bases, fanoutBase{base: v.BaseID, line: v.Line})
+			collectFanoutIDs(v.Each, bases, lits)
+		case *Foreach:
+			collectFanoutIDs(v.Body, bases, lits)
+		case *Loop:
+			collectFanoutIDs(v.Body, bases, lits)
+		case *If:
+			collectFanoutIDs(v.Then, bases, lits)
+			collectFanoutIDs(v.Else, bases, lits)
+		}
+	}
+}
+
+// addLitID records a dispatch's literal --id, skipping [return] (an output label)
+// and unlabeled dispatches.
+func addLitID(d *Dispatch, lits *[]litID) {
+	if d.Command == "return" || d.ID == "" {
+		return
+	}
+	*lits = append(*lits, litID{id: d.ID, line: d.Line})
+}
+
+// matchesReservedPrefix reports whether id has the form "<base>-<digits>" with at
+// least one digit — the shape a fan-out synthesizes and therefore reserves.
+func matchesReservedPrefix(id, base string) bool {
+	rest, ok := strings.CutPrefix(id, base+"-")
+	if !ok || rest == "" {
+		return false
+	}
+	for i := 0; i < len(rest); i++ {
+		if rest[i] < '0' || rest[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // retInfo records a [return] statement and whether it sits inside an
@@ -93,6 +189,8 @@ func collectReturns(stmts []Stmt, inLoop bool, out *[]retInfo) {
 				}
 			}
 		case *Parallel:
+			collectReturns(v.Each, true, out)
+		case *ParallelForeach:
 			collectReturns(v.Each, true, out)
 		case *Foreach:
 			collectReturns(v.Body, true, out)
@@ -506,8 +604,12 @@ func isMapKey(s string) bool {
 	return true
 }
 
-// parseParallel parses "parallel { dispatches } [each -> { ... }]" (§6.1).
+// parseParallel parses the static block "parallel { dispatches } [each -> {...}]"
+// (§6.1) or bifurcates to the dynamic fan-out form when `foreach` follows (R9).
 func (p *parser) parseParallel(toks []token) (Stmt, *ParseError) {
+	if len(toks) >= 2 && toks[1].kind == tkIdent && toks[1].text == "foreach" {
+		return p.parseParallelForeach(toks)
+	}
 	if len(toks) != 2 || toks[1].kind != tkLBrace {
 		return nil, errAt(toks[0], Syntax, "parallel must be followed by '{'")
 	}
@@ -522,6 +624,107 @@ func (p *parser) parseParallel(toks []token) (Stmt, *ParseError) {
 		return nil, err
 	}
 	return par, nil
+}
+
+// parseParallelForeach parses the dynamic fan-out form
+// "parallel foreach $list --id=<base> { <template> } [each -> {...}]" (R9, R11).
+func (p *parser) parseParallelForeach(toks []token) (Stmt, *ParseError) {
+	list, base, err := parseFanoutHeader(toks)
+	if err != nil {
+		return nil, err
+	}
+	tmpl, err := p.parseFanoutBody(toks[0].line)
+	if err != nil {
+		return nil, err
+	}
+	pf := &ParallelForeach{List: list, BaseID: base, Template: *tmpl, Line: toks[0].line}
+	body, ok, err := p.parseEachBody()
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		pf.Each = body
+	}
+	return pf, nil
+}
+
+// parseFanoutHeader parses "parallel foreach $list --id=<base> {" and returns the
+// list ref path (without $) and the id base. Only --id is allowed in the header.
+func parseFanoutHeader(toks []token) (string, string, *ParseError) {
+	if len(toks) < 4 || toks[2].kind != tkBinding {
+		return "", "", errAt(toks[0], Syntax, "parallel foreach must be 'parallel foreach $list --id=<base> {'")
+	}
+	list, i := refPath(toks, 2)
+	base := ""
+	for ; i < len(toks)-1; i++ {
+		t := toks[i]
+		if t.kind != tkFlag {
+			return "", "", errAt(t, Syntax, "parallel foreach header allows only --id before '{'")
+		}
+		name, val := splitFlag(t.text)
+		if name != "id" {
+			return "", "", errAt(t, Syntax, "parallel foreach header allows only --id, got --%s", name)
+		}
+		base = val
+	}
+	if toks[len(toks)-1].kind != tkLBrace {
+		return "", "", errAt(toks[0], Syntax, "parallel foreach must end with '{'")
+	}
+	if base == "" {
+		return "", "", errAt(toks[0], Syntax, "parallel foreach requires --id=<base>")
+	}
+	return list, base, nil
+}
+
+// parseFanoutBody parses the fan-out template: exactly one [command] dispatch with
+// no --id (the runtime synthesizes <base>-<n>). Nesting and non-dispatch lines are
+// rejected, mirroring parseParallelBody (§6.1).
+func (p *parser) parseFanoutBody(openLine int) (*Dispatch, *ParseError) {
+	var tmpl *Dispatch
+	for p.pos < len(p.lines) {
+		toks, err := p.lexNext()
+		if err != nil {
+			return nil, err
+		}
+		if toks == nil {
+			continue
+		}
+		if toks[0].kind == tkRBrace {
+			return finishFanoutBody(tmpl, openLine)
+		}
+		if toks[0].kind != tkCommand {
+			return nil, errAt(toks[0], Syntax, "parallel foreach body must contain exactly one [command] dispatch template")
+		}
+		if tmpl != nil {
+			return nil, errAt(toks[0], Syntax, "parallel foreach allows exactly one dispatch template")
+		}
+		d, err := p.parseDispatch(toks)
+		if err != nil {
+			return nil, err
+		}
+		if d.ID != "" {
+			return nil, perrf(d.Line, 1, Syntax,
+				"the parallel foreach template must not carry its own --id (the runtime synthesizes <base>-<n>)")
+		}
+		tmpl = d
+	}
+	return nil, perrf(openLine, 1, Syntax, "unclosed block opened at line %d", openLine)
+}
+
+// finishFanoutBody validates that a fan-out body held exactly one template.
+func finishFanoutBody(tmpl *Dispatch, openLine int) (*Dispatch, *ParseError) {
+	if tmpl == nil {
+		return nil, perrf(openLine, 1, Syntax, "parallel foreach requires exactly one dispatch template")
+	}
+	return tmpl, nil
+}
+
+// splitFlag splits a lexed flag ("name" or "name=value") into its name and value.
+func splitFlag(text string) (string, string) {
+	if i := strings.IndexByte(text, '='); i >= 0 {
+		return text[:i], text[i+1:]
+	}
+	return text, ""
 }
 
 // parseParallelBody accepts only dispatch atoms; nesting is a Syntax error (§8).
@@ -569,23 +772,37 @@ func checkParallelIDs(par *Parallel) *ParseError {
 	return nil
 }
 
-// parseEach attaches the optional "each -> { ... }" handler (§6.2).
+// parseEach attaches the optional "each -> { ... }" handler to a static
+// parallel block (§6.2).
 func (p *parser) parseEach(par *Parallel) *ParseError {
+	body, ok, err := p.parseEachBody()
+	if err != nil {
+		return err
+	}
+	if ok {
+		par.Each = body
+	}
+	return nil
+}
+
+// parseEachBody consumes and parses an optional "each -> { ... }" handler shared
+// by the static parallel block and the dynamic fan-out (§6.2). The bool is false
+// (consuming nothing) when the next content line is not an each handler.
+func (p *parser) parseEachBody() ([]Stmt, bool, *ParseError) {
 	i := nextContent(p.lines, p.pos)
 	if i >= len(p.lines) || !isHandlerLine(p.lines[i], "each") {
-		return nil
+		return nil, false, nil
 	}
 	toks, err := lexLine(p.lines[i], i+1)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
 	p.pos = i + 1
 	body, err := p.parseHandlerBody(toks)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
-	par.Each = body
-	return nil
+	return body, true, nil
 }
 
 // parseForeach parses "foreach $list { body }" (§6.6).

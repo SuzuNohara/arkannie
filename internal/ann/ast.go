@@ -5,8 +5,6 @@
 // source buffer into an AST and stops on the first error (§7.2).
 package ann
 
-import "strings"
-
 // Program is the root of a parsed Ann source.
 type Program struct{ Statements []Stmt }
 
@@ -60,6 +58,21 @@ type Foreach struct {
 	List string
 	Body []Stmt
 	Line int
+}
+
+// ParallelForeach is the dynamic fan-out form `parallel foreach $list --id=<base>
+// { <template> } [each -> {...}]` (§6, R9/R11). One copy of Template runs per list
+// item, concurrently and bounded by MaxConcurrency, with a synthetic id
+// `<base>-<n>` per item; Each, when present, runs once per item in index order.
+// List holds the list ref path without the $ prefix (dot-path preserved); BaseID
+// is the reserved id prefix; Template carries no --id of its own (the runtime
+// synthesizes it).
+type ParallelForeach struct {
+	List     string
+	BaseID   string
+	Template Dispatch
+	Each     []Stmt
+	Line     int
 }
 
 // Loop executes Body up to Limit times (§2.4, §6.7). Until, when non-nil,
@@ -159,10 +172,7 @@ var keywords = map[string]bool{
 
 // addFlag records a lexed flag ("name" or "name=value"); --id mirrors to ID.
 func (d *Dispatch) addFlag(text string) {
-	name, value := text, ""
-	if i := strings.IndexByte(text, '='); i >= 0 {
-		name, value = text[:i], text[i+1:]
-	}
+	name, value := splitFlag(text)
 	if d.Flags == nil {
 		d.Flags = map[string]string{}
 	}
@@ -172,12 +182,13 @@ func (d *Dispatch) addFlag(text string) {
 	}
 }
 
-func (*Dispatch) stmt() {}
-func (*Assign) stmt()   {}
-func (*Parallel) stmt() {}
-func (*Foreach) stmt()  {}
-func (*Loop) stmt()     {}
-func (*If) stmt()       {}
+func (*Dispatch) stmt()        {}
+func (*Assign) stmt()          {}
+func (*Parallel) stmt()        {}
+func (*ParallelForeach) stmt() {}
+func (*Foreach) stmt()         {}
+func (*Loop) stmt()            {}
+func (*If) stmt()              {}
 
 func (*Dispatch) expr() {}
 func (StrLit) expr()    {}

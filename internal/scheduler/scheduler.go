@@ -160,6 +160,8 @@ func (s *Scheduler) execStmt(st *execState, stmt ann.Stmt) *Escalation {
 		return s.execAssign(st, v)
 	case *ann.Parallel:
 		return s.execParallel(st, v)
+	case *ann.ParallelForeach:
+		return s.execParallelForeach(st, v)
 	case *ann.Foreach:
 		return s.execForeach(st, v)
 	case *ann.Loop:

@@ -46,6 +46,107 @@ func (s *Scheduler) execParallel(st *execState, p *ann.Parallel) *Escalation {
 	return s.processResults(st, p, preps, results)
 }
 
+// execParallelForeach runs the dynamic fan-out (§6, R9/R10): one copy of the
+// template per list item, ids synthesized <base>-<n>, all concurrent (bounded by
+// MaxConcurrency), then results processed strictly in index order so the report
+// is deterministic regardless of completion order. A non-list binding is a
+// runtime type error → Class A notice + skip (§7.3).
+func (s *Scheduler) execParallelForeach(st *execState, pf *ann.ParallelForeach) *Escalation {
+	v, ok := st.ram.Resolve(pf.List)
+	if !ok || v.Kind != ram.KList {
+		s.Notices = append(s.Notices,
+			fmt.Sprintf("[class A] parallel foreach $%s: not a list binding — skipped", pf.List))
+		return nil
+	}
+	preps, esc := s.prepareFanout(st, pf, v.List)
+	if esc != nil {
+		return esc
+	}
+	results := s.runConcurrent(preps)
+	return s.processFanout(st, pf, preps, results)
+}
+
+// prepareFanout resolves one template copy per item (1-based index), each in its
+// own scope carrying $item and $index. Class B stops the fan-out; Class A skips
+// one item.
+func (s *Scheduler) prepareFanout(st *execState, pf *ann.ParallelForeach, items []ram.Value) ([]*preparedDispatch, *Escalation) {
+	preps := make([]*preparedDispatch, 0, len(items))
+	for i := range items {
+		prep, esc, skip := s.prepareItem(st, pf, items[i], i+1)
+		if esc != nil {
+			return nil, esc
+		}
+		if skip {
+			continue
+		}
+		preps = append(preps, prep)
+	}
+	return preps, nil
+}
+
+// prepareItem materializes a copy of the template with the synthetic id
+// <base>-<idx> and prepares it under a scope exposing $item and $index. The scope
+// is live only during preparation (the prompt captures the rendered values); it
+// is popped before the concurrent run, so $item/$index never leak past the
+// statement.
+func (s *Scheduler) prepareItem(st *execState, pf *ann.ParallelForeach, item ram.Value, idx int) (*preparedDispatch, *Escalation, bool) {
+	tmpl := pf.Template // struct copy; ID is set per item, maps stay read-only shared
+	tmpl.ID = fmt.Sprintf("%s-%d", pf.BaseID, idx)
+	st.ram.Push()
+	defer st.ram.Pop()
+	_ = st.ram.Set("item", item)                                                  // 'item' is valid
+	_ = st.ram.Set("index", ram.Value{Kind: ram.KString, Str: strconv.Itoa(idx)}) // 'index' is valid
+	return s.prepare(st, &tmpl)
+}
+
+// processFanout routes results in strict index order (§6): each -> {} runs once
+// per item numbered by index, or unhandled errors escalate after all complete.
+func (s *Scheduler) processFanout(st *execState, pf *ann.ParallelForeach, preps []*preparedDispatch, results []parResult) *Escalation {
+	byDID := make(map[string]parResult, len(results))
+	for _, r := range results {
+		byDID[r.did] = r
+	}
+	hasEach := pf.Each != nil
+	if hasEach {
+		st.loopDepth++
+		defer func() { st.loopDepth-- }()
+	}
+	var firstEsc *Escalation
+	var errored []string
+	for _, prep := range preps {
+		esc := s.handleFanoutResult(st, pf, byDID[prep.did], hasEach, &errored)
+		if esc != nil && firstEsc == nil {
+			firstEsc = esc
+		}
+	}
+	if firstEsc != nil {
+		return firstEsc
+	}
+	if !hasEach && len(errored) > 0 {
+		return escParallelErrors(errored)
+	}
+	return nil
+}
+
+// handleFanoutResult routes one fan-out result: an escalation propagates; with an
+// each handler every result (including errors) runs it; without one, error
+// envelopes are collected for the ordered escalation (semantics of parallel {}).
+func (s *Scheduler) handleFanoutResult(st *execState, pf *ann.ParallelForeach, r parResult, hasEach bool, errored *[]string) *Escalation {
+	if r.esc != nil {
+		return r.esc
+	}
+	if r.env == nil {
+		return nil
+	}
+	if hasEach {
+		return s.runHandler(st, pf.Each, r.env)
+	}
+	if r.env.Status == envelope.StatusError {
+		*errored = append(*errored, r.env.ID)
+	}
+	return nil
+}
+
 // prepareAll resolves every dispatch sequentially (RAM reads happen before
 // any goroutine starts). Class B stops the block; Class A skips one dispatch.
 func (s *Scheduler) prepareAll(st *execState, ds []ann.Dispatch) ([]*preparedDispatch, *Escalation) {
@@ -188,6 +289,10 @@ func walkRefs(stmt ann.Stmt, fn func(string)) {
 		for i := range v.Dispatches {
 			dispatchRefs(&v.Dispatches[i], fn)
 		}
+		walkAll(v.Each, fn)
+	case *ann.ParallelForeach:
+		fn(refBase(v.List))
+		dispatchRefs(&v.Template, fn)
 		walkAll(v.Each, fn)
 	case *ann.Foreach:
 		fn(refBase(v.List))
