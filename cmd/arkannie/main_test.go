@@ -665,14 +665,18 @@ func TestHelp(t *testing.T) {
 	}
 }
 
-// TestHelpDocumentsV02Constructs pins the tutorial to the v0.2 language: it must
-// teach dot-access (value, not whole-envelope), if/else, loop ... until and the
-// --check validation flow. Guards against silent regression to v0.1 wording.
-func TestHelpDocumentsV02Constructs(t *testing.T) {
+// TestHelpDocumentsV03Constructs pins the tutorial to the v0.3 language: it must
+// keep teaching the v0.2 carry-overs (dot-access as value not whole-envelope,
+// if/else, loop ... until, --check) AND document every v0.3 construct — string
+// escapes, multi-line context, the data constructors, dynamic fan-out, the
+// declarative retry directives, and module composition. Guards against silent
+// regression to v0.1/v0.2 wording.
+func TestHelpDocumentsV03Constructs(t *testing.T) {
 	var b strings.Builder
 	printHelp(&b)
 	h := b.String()
 	for _, marker := range []string{
+		// v0.2 carry-overs.
 		"DOT ACCESS",
 		"$r.payload.out",
 		"CONDITIONALS (if / else)",
@@ -680,13 +684,27 @@ func TestHelpDocumentsV02Constructs(t *testing.T) {
 		"loop limit=5 until $r.status == \"success\"",
 		"--check",
 		"syntax only — no agents were run",
+		// v0.3 constructs.
+		"STRINGS, ESCAPES and MULTI-LINE CONTEXT",
+		"BUILDING DATA (list, concat, map)",
+		"$joined = concat($items, \"x\")",
+		"map(k: \"v\", n: $r.campo)",
+		"parallel foreach $r.items --id=W",
+		"$item @ $index",
+		"DECLARATIVE RETRY (--retry / --backoff)",
+		"--retry=2 --backoff=1",
+		"MODULE COMPOSITION (call)",
+		"$sub = call \"sub.ann\"",
 	} {
 		if !strings.Contains(h, marker) {
-			t.Errorf("tutorial missing v0.2 marker %q", marker)
+			t.Errorf("tutorial missing v0.3 marker %q", marker)
 		}
 	}
 	if strings.Contains(h, "v0.1") {
 		t.Errorf("tutorial still references v0.1")
+	}
+	if strings.Contains(h, "In v0.2") || strings.Contains(h, "in v0.2") {
+		t.Errorf("tutorial still carries stale v0.2 wording")
 	}
 	if !strings.Contains(h, "# ann v0.3") {
 		t.Errorf("tutorial should show the current v0.3 version header")

@@ -1,4 +1,4 @@
-# Especificación del lenguaje Ann v0.2
+# Especificación del lenguaje Ann v0.3
 
 ## Autoridad del documento
 
@@ -22,8 +22,8 @@ deliberadamente pequeña.
 ## Preámbulo — no-objetivos (léase primero)
 
 Esta versión especifica **únicamente** lo que el runtime hace hoy. Las siguientes
-capacidades **no** son parte de Ann v0.2 y **no deben** inferirse de este documento; son
-material de v0.3 o posterior:
+capacidades **no** son parte de Ann v0.3 y **no deben** inferirse de este documento; son
+material de v0.4 o posterior:
 
 - **Sin operadores compuestos en guardas.** Las guardas de `if` y de `loop ... until`
   admiten **solo** `==` y `!=`. No existen `&&`, `||`, negación, paréntesis ni
@@ -35,15 +35,30 @@ material de v0.3 o posterior:
   contenido de un payload ni "entiende" texto: compara valores literales. Cualquier
   decisión que requiera comprender lenguaje natural debe delegarse a un agente wave, que
   devuelve un campo escalar sobre el que la guarda pueda comparar.
+- **Sin funciones de usuario (UDF).** Ann no define funciones propias más allá de los
+  constructores nativos (`list`, `concat`, `map`, `call`) y las palabras clave compiladas.
+  No hay declaración de procedimientos ni operadores definidos por el usuario.
+- **`call` sin argumentos.** Un módulo se invoca con `call "ruta.ann"` y recibe RAM vacía
+  (§2.11): **no** admite paso de parámetros. El paso de argumentos a `call` es material de
+  v0.4.
+- **Sin recursión de `call`.** La profundidad de `call` está fijada en 1: un módulo
+  invocado **no** puede a su vez invocar `call` (§2.11). No hay recursión ni cadenas de
+  invocación.
 - **Determinismo no negociable.** La clasificación de comandos, la resolución de
-  bindings, la evaluación de guardas y el ruteo de handlers son deterministas y sin
-  estado oculto. Ninguna construcción de v0.2 introduce no-determinismo.
-- **Fuera de alcance en v0.2** (reservado a v0.3): fan-out dinámico (paralelismo cuyo
-  ancho depende de datos en runtime), composición/anidamiento de bloques de control,
-  reintento declarativo más allá del patrón `loop ... until`, construcción de datos
-  estructurados dentro de Ann (más allá de `list()`), y un sistema formal de comillas o
-  escapes. Las plantillas `{{ ... }}` dentro del texto de usuario tampoco se resuelven
-  (ver §5).
+  bindings, la evaluación de guardas, el ruteo de handlers y el ensamblado del reporte de
+  un fan-out (por índice, §6.10) son deterministas y sin estado oculto. Ninguna
+  construcción de v0.3 introduce no-determinismo observable.
+- **Composición limitada de bloques.** `parallel {}` sigue sin admitir anidamiento
+  (§6.1) y `parallel foreach` admite **exactamente una** plantilla de despacho (§6.10). La
+  composición/anidamiento arbitrario de bloques de control sigue fuera de alcance.
+- **Plantillas de usuario sin resolver.** Las plantillas `{{ ... }}` dentro del texto de
+  usuario no se resuelven; se transportan verbatim (ver §5).
+
+> **Novedades v0.3** (ya implementadas y normadas aquí, retiradas de no-objetivos respecto
+> de v0.2): sistema de comillas y escapes (§1.4), semántica multilínea del bloque de
+> contexto (§2.7), constructores de datos `concat()` y `map()` (§2.6), fan-out dinámico
+> `parallel foreach` (§6.10), reintento declarativo `--retry`/`--backoff` (§2.10) y
+> composición de módulos `call` (§2.11).
 
 ---
 
@@ -76,13 +91,13 @@ Todo programa Ann (`.ann`) **debe** comenzar con la cabecera, en la primera lín
 comentario:
 
 ```
-# ann v0.2
+# ann v0.3
 ```
 
 El `#` **debe** ser el primer carácter de la línea (columna 0). Un valor distinto de
-`# ann v0.2` es un error de parseo de categoría *Version mismatch* (Class B). En modo
-prompt (interactivo contra un solo agente) la cabecera es opcional y se ignora si está
-presente.
+`# ann v0.3` es un error de parseo de categoría *Version mismatch* (Class B) — incluida la
+cabecera heredada `# ann v0.2`, que ahora se **rechaza**. En modo prompt (interactivo
+contra un solo agente) la cabecera es opcional y se ignora si está presente.
 
 ### §1.1 Comentarios
 
@@ -126,6 +141,52 @@ Además, la gramática recontextualiza estructuralmente estas palabras:
 - `until` es palabra reservada **solo** en la posición de cabecera de un `loop`
   (`loop limit=N until <guarda> {`, ver §6.7). En cualquier otra posición `until` es
   texto libre.
+- `parallel foreach` es una forma de dos palabras que introduce el fan-out dinámico
+  (§6.10). Un `foreach` a solas sigue siendo iteración secuencial (§6.6); solo la
+  secuencia `parallel foreach` dispara el fan-out.
+
+**Palabras clave sensibles a la posición** (`concat`, `map`, `call`): son constructores
+**solo** cuando aparecen en posición de expresión inmediatamente seguidas de su
+delimitador de apertura — `concat(`, `map(` y `call "` (`call` seguido de un literal de
+string). En cualquier otra posición (argumento posicional suelto, texto de contexto,
+interior de un literal de string) son **texto libre** y nunca rompen el parseo. Esta regla
+es normativa: `[echo] use map for config` produce cuatro argumentos de texto, no un
+constructor.
+
+**Referencias implícitas del fan-out** (`$item`, `$index`): dentro de la plantilla de un
+`parallel foreach` (§6.10) el runtime liga `$item` al elemento actual y `$index` a su
+índice **1-based**. Fuera de esa plantilla no existen; referirlas es un aviso Class A.
+
+---
+
+### §1.4 Literales de string, comillas y escapes
+
+Un literal de string se delimita con comillas dobles `"…"`. Dentro de un literal se
+reconocen **exactamente tres** secuencias de escape; el resto de caracteres es literal.
+
+| Secuencia | Resultado | Momento de resolución |
+|---|---|---|
+| `\"` | una comilla doble literal `"` | léxico (el lexer produce el string ya des-escapado) |
+| `\\` | una barra invertida literal `\` | léxico |
+| `\$` | se **conserva verbatim** (`\$`) en el token, y luego se convierte en un `$` literal en la pasada de interpolación | interpolación (§2.8) |
+
+- Cualquier otra secuencia `\X` (por ejemplo `\q`, `\n`) es un **error léxico** de
+  categoría *Syntax* (Class B), reportado en la columna de la barra invertida.
+- Un literal sin cerrar (`"abierto` sin comilla final) es un error léxico *Syntax*.
+- Los tokens que **no** son escapes se transportan verbatim dentro del literal: `{{ slot }}`,
+  `$ref` (que sí se interpola, §2.5), `//` y el resto de puntuación.
+
+**El escape `\$` — mecanismo de una pasada.** `\$` no es un escape léxico: el lexer y el
+parser lo llevan intacto (`\$`) hasta las posiciones donde se interpola (argumentos de
+despacho, literales de string, elementos de `list()`, texto de contexto — §2.8). Allí una
+pasada única enmascara cada `\$` para que el patrón de referencia **no** lo tome como una
+`$ref`, resuelve las referencias reales, y finalmente restaura la máscara como un `$`
+literal. Consecuencias normativas:
+
+- `"price \$5"` produce el texto `price $5`; el `$5` **no** se resuelve contra RAM.
+- Un `\$nombre` de un binding inexistente **no** es un error de ruta irresoluble (§7.3): el
+  `$` es literal, no hay referencia que resolver.
+- Una `$ref` real en el mismo texto sigue resolviéndose con normalidad.
 
 ---
 
@@ -142,6 +203,10 @@ Además, la gramática recontextualiza estructuralmente estas palabras:
 - Los argumentos son strings posicionales (sin comillas para valores de una palabra).
 - Los flags llevan prefijo `--`; los flags booleanos no tienen valor, los flags con valor
   usan `=`.
+- **Flags reservados del runtime.** `--id`, `--timeout`, `--retry` y `--backoff` son
+  directivas built-in que el runtime consume: **no** se declaran en la operación del agente
+  ni se transportan en el `context_block` (§9). El resto de los flags deben estar
+  declarados por la operación (§9). `--retry`/`--backoff` se especifican en §2.10.
 - Un átomo de comando en su propia línea es un statement completo.
 - Un átomo de comando seguido de handlers `->` es un despacho con ruteo de resultado.
 
@@ -176,12 +241,17 @@ El sobre de retorno, su validación estructural y el ruteo por `status` están n
 $nombre = [comando] args
 $nombre = "cadena literal"
 $nombre = list("a", "b", "c")
+$nombre = concat($a, $b)
+$nombre = map(clave: "valor")
+$nombre = call "modulo.ann"
 ```
 
 - Los bindings son locales a RAM (ver §4).
 - El lado izquierdo es `$identificador` — alfanumérico más `_`, sin `-`; no puede ser una
   palabra reservada de §1.3.
-- El lado derecho es un átomo de comando, un literal de string o un constructor `list()`.
+- El lado derecho es una **expresión**: un átomo de comando, un literal de string, un
+  constructor de datos (`list()`, `concat()`, `map()`, §2.6) o una invocación de módulo
+  `call "…"` (§2.11).
 - Una asignación no produce salida; el resultado se guarda solo en RAM.
 - Si el comando retorna `error`, el binding **no** se liga y aplican las reglas de
   escalación de error. Si el comando retorna `success`, el binding recibe el `payload`.
@@ -190,7 +260,9 @@ $nombre = list("a", "b", "c")
 
 Las construcciones de control se detallan en §6. Formas admitidas:
 
-- `parallel { ... } [each -> { ... }]` — despacho concurrente (§6.1–§6.5, §6.8).
+- `parallel { ... } [each -> { ... }]` — despacho concurrente estático (§6.1–§6.5, §6.8).
+- `parallel foreach $lista --id=BASE { plantilla } [each -> { ... }]` — fan-out dinámico
+  sobre una lista (§6.10).
 - `foreach $lista { ... }` — iteración secuencial (§6.6).
 - `loop limit=N [until <guarda>] { ... }` — repetición acotada con post-condición
   opcional (§6.7).
@@ -203,23 +275,80 @@ Las construcciones de control se detallan en §6. Formas admitidas:
 ```
 
 - `$binding` — resuelto desde RAM en tiempo de ejecución (§2.8).
-- Los slots `{{ clave }}` que aparezcan dentro del texto de usuario **no** se resuelven en
-  v0.2: se transportan verbatim (ver §5). La única sustitución dentro de texto de usuario
-  es `$ref`/acceso por punto.
+- Un `\$` escapa la interpolación: produce un `$` literal y **no** se resuelve (§1.4).
+- Los slots `{{ clave }}` que aparezcan dentro del texto de usuario **no** se resuelven:
+  se transportan verbatim (ver §5). La única sustitución dentro de texto de usuario es
+  `$ref`/acceso por punto (con `\$` como su escape).
 
-### §2.6 Constructor `list()`
+### §2.6 Constructores de datos (`list()`, `concat()`, `map()`)
+
+Ann construye valores compuestos con tres constructores nativos. Todos comparten la misma
+gramática de **elemento**, de modo que anidan libremente entre sí.
+
+**Elemento (gramática común).** Un elemento es exactamente uno de:
+
+- un literal de string (`"…"`, con las comillas y escapes de §1.4);
+- una referencia `$ref` (incluida una ruta con punto, §2.8; la ruta se conserva sin el `$`);
+- un constructor anidado `list(...)` o `map(...)`.
+
+**Resolución de un `$ref` de elemento (cambio respecto de v0.2).** Un `$ref` de elemento
+que **no** resuelve **ya no** se sustituye por un string vacío: emite un aviso Class A que
+nombra el binding y el elemento se **omite** del valor construido; el programa continúa. La
+misma regla aplica a `list()`, `concat()` y a los valores de `map()`.
+
+#### `list()` — lista ordenada
 
 ```
 $items = list("alpha", "beta", "gamma")
 $items = list($a, $b, $c)
+$anidada = list("a", list("b"), $r.items)
 ```
 
-- Crea un binding de tipo lista.
-- Los elementos son literales de string o referencias `$ref` (incluidas rutas con punto,
-  ver §2.8).
-- Un `$ref` de elemento que no resuelve se sustituye por un elemento string vacío (no
-  escala).
+- Crea un binding de tipo lista (`KList`).
+- Un elemento `list(...)` anidado produce una lista anidada (no se aplana).
 - Las listas son inmutables tras su creación.
+
+#### `concat()` — concatenación con aplanado de un nivel
+
+```
+$joined = concat($items, "x")
+$joined = concat($lista, $otra, $cola)
+```
+
+- Toma cero o más argumentos, cada uno un **elemento** (misma gramática).
+- **Aplana exactamente un nivel**, en orden estable de izquierda a derecha: un argumento
+  que resuelve a lista aporta sus elementos directos; un argumento que **no** es lista
+  aporta un solo elemento suelto en su posición. Una lista **anidada dentro** de un
+  argumento permanece anidada (solo se aplana el nivel superior).
+- `concat()` sin argumentos es una lista vacía válida; `concat($a)` con un único argumento
+  lista es una copia de esa lista.
+- Un argumento `$ref` irresoluble se omite con aviso Class A (ver arriba).
+
+#### `map()` — mapa ordenado clave→valor
+
+```
+$cfg = map(k: "v", n: $r.campo)
+$cfg = map(a: list("x"), b: map(c: "d"))
+```
+
+- Crea un binding de tipo mapa (`KMap`).
+- Cada entrada es `clave: valor`. La **clave** es un identificador (`[A-Za-z0-9_]+`); una
+  clave entre comillas o no-identificador es un error *Syntax* con mensaje `map key`. El
+  **valor** es un elemento (la misma gramática de §2.6, incluidos `list()`/`map()`
+  anidados y rutas con punto).
+- El `:` es un separador **solo dentro del constructor `map(...)`**; fuera de él conserva
+  su papel de separador del bloque de contexto (§2.7). El lexer distingue ambos por
+  profundidad de paréntesis.
+- Una **clave duplicada** es un error *Syntax* que nombra la clave, con su `L:C`.
+- Formas malformadas — falta el `:`, paréntesis sin cerrar, clave no-identificador, valor
+  vacío — son errores *Syntax* con mensaje específico de `map` y un `L:C` válido.
+- Un valor `$ref` irresoluble omite la entrada con aviso Class A.
+- Un `map()` puede aparecer como elemento dentro de `list()` y `concat()`.
+- Un `KMap` emitido por `[return]` se renderiza como bloque YAML con cerca (```` ```yaml ````).
+
+**`concat` y `map` como texto.** Ambos nombres son constructores **solo** inmediatamente
+antes de `(` en posición de expresión (§1.3). Como argumento posicional suelto, dentro del
+texto de contexto o dentro de un literal de string, son texto verbatim.
 
 ### §2.7 Bloque de contexto
 
@@ -233,8 +362,19 @@ wave interpreta para extraer la información que necesita.
 El `: ` (dos puntos + espacio) separa la cabecera estructurada del bloque de contexto.
 
 - **Una línea:** el contexto termina al fin de línea.
-- **Multilínea:** el contexto continúa en las líneas indentadas siguientes hasta una línea
-  en blanco o un token de handler `->`.
+- **Multilínea (semántica v0.3, reemplaza la regla de corte por línea en blanco):** el
+  bloque comienza en la primera línea siguiente si está indentada, y continúa capturando
+  las líneas subsiguientes. El bloque **termina** en la primera línea que cumpla una de:
+  (a) un **dedent** — una línea menos indentada que la primera línea del bloque; (b) una
+  línea `}`; o (c) una línea que contenga el token de handler `->`.
+- **Líneas en blanco internas preservadas.** Una línea en blanco **dentro** del bloque se
+  conserva (es parte del texto: separa párrafos). Las líneas en blanco **finales** se
+  descartan (son separadores, no contenido). Esto invierte la regla de v0.2, donde la
+  primera línea en blanco cortaba el bloque.
+- **Indentación relativa preservada.** Solo se recorta el prefijo común (la indentación de
+  la primera línea del bloque); la indentación adicional de las líneas más profundas se
+  conserva relativa. Así, listas y notas anidadas dentro del contexto mantienen su forma.
+- **Primera línea no indentada:** no hay bloque de contexto (contexto vacío).
 - **Sin contexto:** las operaciones que no lo necesitan omiten el `:` por completo.
 
 **Mapeo al `context_block`:** arkannie coloca el texto en `context_block.context.text` y
@@ -264,7 +404,7 @@ payload:
 `message` al desarrollador — no lo descarta en silencio (excepción a la regla de descarte
 de `info` de §2.2) — y marca el status del programa como `info`. El desarrollador
 re-emite el comando con la información añadida al contexto y arkannie re-despacha. No hay
-re-despacho automático en v0.2.
+re-despacho automático.
 
 `resumable: true` indica que el agente espera ser re-despachado; `resumable: false` (o
 ausente) significa que el agente se rindió: `info` terminal, sin re-despacho esperado.
@@ -353,6 +493,83 @@ compilación):
 - Un `[return]` dentro de un `foreach`/`loop`/`each` requiere `--id`; cada corrida emite su
   propia sección numerada (`--id-1`, `--id-2`, …).
 
+### §2.10 Reintento declarativo — `--retry` / `--backoff`
+
+Un despacho puede declarar un reintento con dos flags reservados del runtime (§2.1); ambos
+son consumidos por arkannie y **no** llegan al agente.
+
+```
+[seeker] retryable --retry=2 --backoff=1
+```
+
+- `--retry=N` autoriza hasta **`1 + N`** intentos completos del mismo despacho. El valor
+  por defecto es `0`: sin `--retry`, un despacho hace exactamente un intento (semántica
+  idéntica a v0.2).
+- **Solo se reintenta un resultado reintentable:** un envelope de `error` con
+  `payload.recoverable: true`, o el envelope de `error` sintetizado a partir de un
+  **timeout** de la invocación. Un `error` **no recuperable** (`recoverable: false`) no se
+  reintenta: un solo intento y luego la escalación normal de error no manejado (§7). Los
+  status `success` e `info` nunca se reintentan.
+- **Reintentos agotados = capturables.** Cuando se agotan los `N` reintentos, el último
+  envelope de `error` sigue siendo enrutable por un handler `error -> {}`; **no** es una
+  escalación Class B fatal por sí misma. Sin handler de error aplica la escalación normal.
+- El **retry correctivo interno** (la re-invocación por violación de protocolo del envelope,
+  R10) es independiente: ocurre dentro de **un** intento declarativo y **no** consume un
+  `--retry`.
+- `--backoff=S` introduce una espera **lineal** antes de cada reintento: antes del reintento
+  `n` (1-based) se pausa `S * n` segundos. Con `--retry=2 --backoff=2`, las esperas son
+  `2 s` y luego `4 s`. Sin `--backoff` no hay espera.
+- **Candado del executor.** `--retry` sobre un agente de scope `executor` es una parada
+  **Class B pre-despacho**: **nada** se despacha. Re-ejecutar un executor duplicaría sus
+  efectos secundarios; el retry declarativo se restringe a agentes `agnostic`.
+- Un `--retry`/`--backoff` negativo es un error de tipo Class A.
+
+### §2.11 `call` — composición de módulos
+
+`call` invoca otro programa `.ann` como una **función**: RAM aislada, valor de retorno
+explícito, sin fugas de estado en ninguna dirección.
+
+```
+call "sub.ann"                 // statement: ejecuta el módulo, no liga nada
+$sub = call "sub.ann"          // expresión: liga el valor de retorno del módulo
+```
+
+**Gramática.** `call` es una palabra clave sensible a la posición (§1.3): es `call`
+**solo** seguido inmediatamente de un **literal de string** en posición de statement o de
+expresión de asignación. `call` sin ruta, `call` con una ruta que no es literal de string
+(`call mod.ann`), o `$x = call` son errores *Syntax* reportados en el `L:C` de la palabra
+clave. Fuera de esas dos posiciones, `call` es texto libre.
+
+**Semántica de función:**
+
+- **RAM aislada.** El módulo hijo arranca con RAM vacía: los bindings del padre son
+  invisibles al hijo, y los bindings del hijo nunca se filtran de vuelta al padre.
+- **Profundidad 1.** El hijo **no** puede a su vez `call`: un `call` anidado es una parada
+  Class B cuyo detalle menciona la profundidad (`depth`). No hay recursión (no-objetivo).
+- **Checkpoint apagado en el hijo.** El protocolo de checkpoint (§10) no opera dentro del
+  módulo invocado.
+- **Valor de retorno.** El valor que `call` liga depende de los `[return]` del hijo: un
+  único `[return]` liga ese valor; dos o más `[return]` etiquetados ligan un `KMap`
+  indexado por su `--id`. Un `call` en forma de statement (sin asignación) ejecuta el
+  módulo pero no liga nada; referir el binding inexistente es un aviso Class A.
+- **Aislamiento de la salida.** Los `[return]` del hijo **nunca** aparecen en el reporte
+  del padre; solo alimentan el valor de retorno.
+
+**Seguridad de ruta.** La ruta se resuelve relativa al directorio del programa padre, se
+normaliza (`Clean`) y **debe** quedar bajo ese directorio (comprobación de prefijo). Una
+ruta que escapa del directorio (`"../fuera.ann"`) es una parada Class B.
+
+**Carga y errores.** Un módulo inexistente y una cabecera de versión incorrecta son ambos
+Class B, con la línea del sitio de `call` en el detalle. Un hijo que falla (p. ej. un error
+no manejado dentro del módulo) escala Class B en el padre; el checkpoint del padre **no**
+registra el `call` como paso completado, de modo que un resume re-ejecuta el `call`
+completo.
+
+**Directorios de corrida y frontmatter.** Las corridas del hijo viven bajo
+`<runID>/call-<n>/` en `.mem`. El frontmatter de la salida del padre (`agent(s)`) **une**
+los agentes despachados por los módulos invocados (parseados a profundidad 1, relativos al
+directorio del programa padre) con los del propio padre.
+
 ---
 
 ## §3 Clasificador de instrucciones
@@ -361,9 +578,9 @@ La clasificación es determinista. Para cada statement, arkannie decide en este 
 toma la primera coincidencia:
 
 ```
-1. Palabra clave de control de flujo (parallel, foreach, loop, if)  → se maneja localmente
-2. Palabra clave nativa (ask-user, notify, clarify, return)          → la ejecuta el runtime
-3. [comando] resuelto contra el registry de agentes (.agents/)       → despacho wave (proceso claude)
+1. Palabra clave de control de flujo (parallel, parallel foreach, foreach, loop, if) → se maneja localmente
+2. Palabra clave nativa (ask-user, notify, clarify, return) o composición (call)     → la ejecuta el runtime
+3. [comando] resuelto contra el registry de agentes (.agents/)                        → despacho wave (proceso claude)
 4. Si no resuelve → escalación Class B: comando desconocido
 ```
 
@@ -431,10 +648,10 @@ render, rellenando **cuatro slots provistos por el runtime**:
 ```
 
 Los slots `{{ clave }}` que aparezcan **dentro del texto de usuario** (contexto de un
-despacho o literales de string) **no** se resuelven en v0.2: se transportan verbatim. La
-única sustitución dentro de texto de usuario es `$ref`/acceso por punto (§2.8). Un motor de
-slots de usuario con condicionales (`{{#if}}`) y fallbacks (`{{ clave | ... }}`) **no** es
-parte de v0.2 (no-objetivo).
+despacho o literales de string) **no** se resuelven: se transportan verbatim. La única
+sustitución dentro de texto de usuario es `$ref`/acceso por punto (§2.8), con `\$` como su
+escape (§1.4). Un motor de slots de usuario con condicionales (`{{#if}}`) y fallbacks
+(`{{ clave | ... }}`) **no** es parte de Ann v0.3 (no-objetivo).
 
 ---
 
@@ -564,6 +781,65 @@ completado. Al reanudar más allá de él, la guarda **no** se re-evalúa y los 
 laterales de su rama **no** se re-disparan; el resultado final reproduce el de una corrida
 limpia.
 
+### §6.10 `parallel foreach` — fan-out dinámico
+
+`parallel foreach` despacha una **plantilla** de wave concurrentemente, una vez por
+elemento de una lista de runtime. Es el paralelismo cuyo ancho depende de los datos.
+
+```
+parallel foreach $r.items --id=W {
+  [echo] : "$item @ $index"
+}
+  each -> {
+    [notify] : "$result"
+  }
+```
+
+**Gramática:**
+
+- La cabecera es `parallel foreach <$ref> --id=<BASE> {`. El `$ref` es la lista a recorrer
+  (admite ruta con punto, §2.8; la ruta se conserva sin el `$`).
+- `--id=<BASE>` es **obligatorio** y es el **único** flag admitido en la cabecera; su
+  ausencia o cualquier flag extra es error *Syntax*. Una cabecera sin `{`, sin `$ref`, o
+  con texto suelto antes del `{` es error *Syntax*.
+- El cuerpo contiene **exactamente una** plantilla de despacho. Cero o dos despachos son
+  error *Syntax*.
+- La plantilla **no** puede llevar su propio `--id`: el runtime sintetiza el id (error
+  *Syntax* si lo lleva).
+- El handler `each -> { ... }` es opcional.
+
+**IDs sintéticos y determinismo:**
+
+- El runtime sintetiza los ids `<BASE>-1`, `<BASE>-2`, … **1-based** por índice de
+  elemento. Dentro de la plantilla, `$item` es el elemento actual y `$index` su índice
+  1-based.
+- Los despachos corren concurrentemente bajo el semáforo de `max_concurrency`. **El reporte
+  y el handler `each` se ensamblan estrictamente en orden de índice**, con independencia del
+  orden de completado (determinismo observable). Un `[return]` dentro de `each` emite
+  secciones numeradas por índice (`<label>-1`, `<label>-2`, …).
+- `$item`/`$index` viven solo durante el statement: referirlos después es un aviso Class A
+  (`unbound`).
+
+**Reserva de prefijo (R13):** ningún `--id` **de despacho** literal en el programa —en
+cualquier orden textual, incluido dentro de un `parallel {}` estático— puede coincidir con
+el patrón `^<BASE>-[0-9]+$` de un fan-out; hacerlo es error *Syntax* de colisión. Los ids
+que no calzan el patrón (`W1`, `W-a`, base distinta) no colisionan. Un `--id` de `[return]`
+puede coincidir con el patrón **sin** colisionar: solo los ids de despacho reservan.
+
+**Casos límite y escalación:**
+
+- Un `$ref` que **no** resuelve a una lista es un aviso Class A (`not a list`): no se
+  despacha nada y el programa continúa.
+- Una lista vacía produce cero despachos; el `each` no corre; no hay error.
+- Un despacho de ítem que retorna `error` sin handler `each` escala **Class B** (`unhandled
+  parallel errors`) tras completar todos los ítems.
+- Un comando de plantilla desconocido es Class B (`unknown command`) durante la preparación.
+- El seguimiento de dependencias del checkpoint recorre el `$ref` de la lista y toda `$ref`
+  de la plantilla y del `each`.
+
+Un `foreach` a solas sigue siendo iteración secuencial (§6.6) y un `parallel {}` estático
+(§6.1) queda intacto: solo la secuencia `parallel foreach` dispara el fan-out.
+
 ---
 
 ## §7 Comportamiento ante errores de parseo y escalación
@@ -572,10 +848,10 @@ limpia.
 
 | Categoría | Descripción |
 |---|---|
-| Syntax error | Token mal formado, bloque sin cerrar, `--id` faltante en `parallel`, `[return]` con reglas de etiqueta violadas, `[if]`/`while` como forma rechazada |
+| Syntax error | Token mal formado, bloque sin cerrar, escape inválido (`\X`) o literal de string sin cerrar (§1.4), `--id` faltante en `parallel`, cabecera/cuerpo malformado de `parallel foreach` (§6.10), `map()` malformado o clave duplicada (§2.6), `call` sin ruta literal (§2.11), `[return]` con reglas de etiqueta violadas, `[if]`/`while` como forma rechazada |
 | Unknown command | `[nombre]` no está en el registry y no es palabra clave |
-| Type error | Tipo de argumento incorrecto, binding usado antes de ligarse, `loop limit` no entero o ≤ 0, operación de lista sobre no-lista |
-| Version mismatch | Primera línea no comentario de un `.ann` distinta de `# ann v0.2` |
+| Type error | Tipo de argumento incorrecto, binding usado antes de ligarse, `loop limit` no entero o ≤ 0, operación de lista sobre no-lista, `--retry`/`--backoff` negativo |
+| Version mismatch | Primera línea no comentario de un `.ann` distinta de `# ann v0.3` (incluye la heredada `# ann v0.2`) |
 
 ### §7.2 Parada en el primer error
 
@@ -595,8 +871,18 @@ completar antes de reportar.
 | `loop limit` no entero o ≤ 0 | A |
 | Guarda de `if`/`until` con operando compuesto | A (skip, no escala) |
 | `foreach` sobre binding no-lista | A (skip) |
+| `parallel foreach` sobre binding no-lista | A (skip) |
 | `[return]` con operando no ligado o ausente | A (skip) |
+| `$ref` de elemento irresoluble en `list()`/`concat()`/`map()` | A (omite el elemento) |
 | Ruta `$ref` irresoluble en interpolación de `context_block` | B |
+| `\X` (escape inválido) o literal de string sin cerrar | B (Syntax) |
+| `--retry`/`--backoff` negativo | A |
+| `--retry` sobre agente `executor` | B (pre-despacho, no despacha) |
+| Ítem de `parallel foreach` con `error` sin handler `each` | B (tras completar todos) |
+| `call` a ruta fuera del directorio del programa | B |
+| `call` a módulo inexistente o con cabecera de versión incorrecta | B |
+| `call` anidado (excede profundidad 1) | B |
+| Módulo invocado por `call` que falla | B (en el padre; el resume re-ejecuta el `call`) |
 
 ### §7.4 Protocolo completo de clases de error
 
@@ -623,28 +909,36 @@ El **formato exacto** de todo mensaje de error de arkannie está normado en
 
 ---
 
-## §8 Estado de las construcciones de Ann v0.2
+## §8 Estado de las construcciones de Ann v0.3
 
 | Construcción | Estado | Notas |
 |---|---|---|
 | `[comando] args` | Soportado | Despacho wave o palabra clave nativa |
-| `[comando] arg : texto` | Soportado | Bloque de contexto → `context.text` |
+| `[comando] arg : texto` | Soportado | Bloque de contexto → `context.text` (multilínea §2.7) |
 | `$name = [comando]` | Soportado | Binding desde el `payload` de `success` |
-| `$name = "literal"` | Soportado | Binding de string literal |
-| `$name = list(...)` | Soportado | Constructor de lista |
+| `$name = "literal"` | Soportado | Binding de string literal (comillas y escapes §1.4) |
+| `$name = list(...)` | Soportado | Constructor de lista; anida `list()`/`map()` (§2.6) |
+| `$name = concat(...)` | Soportado | Concatenación con aplanado de un nivel (§2.6) |
+| `$name = map(k: v, ...)` | Soportado | Constructor de mapa ordenado (§2.6) |
+| `$name = call "mod.ann"` | Soportado | Composición de módulos como función (§2.11) |
+| `\"` / `\\` / `\$` en literales | Soportado | Escapes de string (§1.4) |
 | `$ref` / `$ref.seg.seg` | Soportado | Acceso por punto sobre KMap (§2.8) |
 | `success -> {}` / `error -> {}` / `info -> {}` | Soportado | Handlers trinarios |
 | `parallel {}` + `each ->` | Soportado | Despacho concurrente, plano |
+| `parallel foreach $l --id=B {}` + `each ->` | Soportado | Fan-out dinámico determinista (§6.10) |
 | `foreach $list {}` | Soportado | Iteración secuencial; admite lista con punto |
 | `loop limit=N {}` | Soportado | Bucle acotado |
 | `loop limit=N until <guarda> {}` | Soportado | Post-condición determinista (§6.7) |
 | `if <guarda> {} else {}` | Soportado | Condicional determinista (§6.9) |
+| `--retry=N` / `--backoff=S` | Soportado | Reintento declarativo, solo `agnostic` (§2.10) |
 | `[return] <operando>` | Soportado | Indicador de salida (§2.9) |
 | `[ask-user]` / `[notify]` / `[clarify]` | Soportado | Palabras clave nativas |
 | `[if]` con corchetes / `while` / `[while]` | Rechazado | Usar `if` o `loop` |
-| `parallel {}` anidado | No soportado | Solo plano en v0.2 |
-| Guardas compuestas (`&&`, `||`, aritmética) | No soportado | v0.3 (no-objetivo) |
-| Fan-out dinámico, composición, retry declarativo, construcción de datos, comillas formales | No soportado | v0.3 (no-objetivo) |
+| `parallel {}` anidado | No soportado | Solo plano |
+| `parallel foreach` con ≠1 plantilla | Rechazado | Exactamente una plantilla (§6.10) |
+| `call` anidado / `call` con argumentos | No soportado | v0.4 (no-objetivo); profundidad fija 1 |
+| Guardas compuestas (`&&`, `||`, aritmética) | No soportado | v0.4 (no-objetivo) |
+| Funciones de usuario (UDF) | No soportado | v0.4 (no-objetivo) |
 
 ---
 
@@ -754,4 +1048,19 @@ anti-divergencia. Ante cualquier duda de semántica, el test decide.
 | §6.9 / §10 `if` + resume | El `if` de nivel superior cuenta como un paso; el resume no re-evalúa la guarda ni re-dispara la rama | `internal/scheduler/ifresume_test.go`: `TestIfTopLevelCheckpointResume` |
 | §11 `--check` (parse-only) | Exit 0/1/64, descargo *syntax only*, cero efectos secundarios, exclusión con flags de ejecución | `cmd/arkannie/check_test.go`: `TestCheckValidProgram`, `TestCheckParseError`, `TestCheckInvalidCompositions`, `TestParseArgsCheck`, `TestHelpDocumentsCheck` |
 | §1.3 palabras clave como texto libre; `until` contextual | `until`/`while` fuera de posición son texto; formas rechazadas | `internal/ann/parser_test.go`: `TestKeywordsAsFreeText`, `TestForeachLoop` |
-| §8 conjunto completo de construcciones v0.2 | Todas las construcciones parsean al AST esperado | `internal/ann/parser_test.go`: `TestParseGolden` (fixture `testdata/ann/all_constructs.ann` ↔ `.golden`) |
+| §1.4 Comillas y escapes (léxico) | `\"`/`\\` reales, `\$` verbatim, `\X` inválido = Syntax en la col. de la barra, literal sin cerrar | `internal/ann/quoting_test.go`: `TestLexStringEscapes`, `TestEscapedDollarSurvivesParsing` |
+| §1.4 Escape `\$` (una pasada, interpolación) | `EscapePlaceholder`/`RestoreEscapes` ocultan `\$` del patrón de ref y lo restauran como `$` literal; la ref real sobrevive | `internal/ram/escape_test.go`: `TestEscapePlaceholderRoundTrip`; `internal/scheduler/datalit_test.go`: `TestEscapedDollarInValues`, `TestEscapedDollarInArgs`; `internal/dispatch/quoting_test.go`: `TestContextBlockEscapedDollar` |
+| §2.6 `list()` (anidamiento, elemento con punto) | `list()` anida `list()`/`map()`; elemento con punto es un solo ref | `internal/ann/datalit_test.go`: `TestListNested`, `TestListDottedElement`; `internal/scheduler/datalit_test.go`: `TestListValueNested`, `TestListValueMapElement` |
+| §2.6 `concat()` (aplanado de un nivel, orden) | Aplana un nivel, orden estable, no-lista suelto, vacío/único, arg anidado permanece anidado | `internal/ann/datalit_test.go`: `TestConcatBasic`, `TestConcatMixed`, `TestConcatBorders`, `TestConcatNestedListArg`; `internal/scheduler/datalit_test.go`: `TestConcatFlattenOneLevel`, `TestConcatMixedNonList`, `TestConcatBordersValue`, `TestExecAssignConcat` |
+| §2.6 `map()` (claves ident, valores, anidamiento) | Entradas ordenadas, clave ident, valor con gramática de elemento, `map()` como elemento, duplicada/malformada = Syntax con L:C | `internal/ann/maplit_test.go`: `TestMapBasic`, `TestMapNested`, `TestMapDuplicateKey`, `TestMapSyntaxErrors`, `TestMapAsElement`, `TestMapAsTextPositional`; `internal/scheduler/maplit_test.go`: `TestMapValueDotPathAndReturn`; `internal/scheduler/datalit_test.go`: `TestAssignMapLit` |
+| §2.6 `$ref` de elemento irresoluble = Class A (omite) | Elemento/entrada irresoluble se omite con aviso Class A nombrando el binding (cambio vs v0.2) | `internal/scheduler/datalit_test.go`: `TestUnresolvableInListIsClassA`, `TestUnresolvableInConcatIsClassA`; `internal/scheduler/maplit_test.go`: `TestMapValueUnresolvableOmitted` |
+| §1.3 `concat`/`map`/`call` sensibles a posición | Solo constructores antes de `(`/`"`; bare/contexto/string = texto verbatim | `internal/ann/datalit_test.go`: `TestKeywordsAsText`; `internal/ann/maplit_test.go`: `TestMapAsTextPositional`; `internal/ann/call_test.go`: `TestParseCallFreeText` |
+| §2.6 seguimiento de deps de checkpoint (walkRefs) | refs en list/concat/map (anidados y top-level) rastreados | `internal/scheduler/datalit_test.go`: `TestWalkRefsTracksListConcat`, `TestWalkRefsTracksTopLevelMap` |
+| §2.7 Contexto multilínea (v0.3) | Blanco interno preservado; corta en dedent/`}`/`->`; indentación relativa; blancos finales descartados; primera línea sin indentar = sin contexto | `internal/ann/quoting_test.go`: `TestCollectContextMultiline` |
+| §2.10 Reintento declarativo (`--retry`/`--backoff`) | 1+N intentos, solo recuperable/timeout, agotado = capturable, backoff lineal, correctivo no cuenta, executor = Class B pre-despacho, sin retry = 1 intento | `internal/scheduler/retry_test.go`: `TestDeclarativeRetry` |
+| §2.11 `call` (parseo) | `*Call` como statement y expresión; requiere ruta literal; `call` fuera de posición = texto | `internal/ann/call_test.go`: `TestParseCallStatement`, `TestParseCallExpression`, `TestParseCallRequiresString`, `TestParseCallFreeText` |
+| §2.11 `call` (semántica de función) | Valor único/KMap, bare no liga, RAM aislada, fallo+resume, profundidad 1, traversal, carga, run-dirs, sin fuga al reporte | `internal/scheduler/call_test.go`: `TestCallSingleReturnValue`, `TestCallMultiReturnKMap`, `TestCallBareExecutesNoBinding`, `TestCallRAMIsolation`, `TestCallFailEscalatesResumeReexecutes`, `TestCallDepthGuard`, `TestCallPathTraversal`, `TestCallLoadErrors`, `TestCallRunDirsNamespaced`, `TestCallReturnsDoNotLeakToReport` |
+| §2.11 `call` (frontmatter une módulos) | El `agent(s)` del padre pliega los agentes de los módulos invocados (profundidad 1) | `cmd/arkannie/call_frontmatter_test.go`: `TestProgramAgentsIncludesCalledModules` |
+| §6.10 `parallel foreach` (parseo, reserva de prefijo) | Header/cuerpo, una plantilla, `--id` base, plantilla sin id, colisión de prefijo `^base-\d+$`, dot-path, regresiones | `internal/ann/fanout_test.go`: `TestParallelForeachParse`, `TestParallelForeachNoDotPath`, `TestParallelForeachEach`, `TestParallelForeachOneTemplate`, `TestParallelForeachIDRequired`, `TestParallelForeachTemplateNoID`, `TestParallelForeachHeaderExtraFlag`, `TestParallelForeachPrefixCollision`, `TestParallelForeachNoFalseCollision`, `TestParallelForeachStaticRegression`, `TestForeachStillFreeStanding`, `TestParallelForeachMalformedHeader`, `TestParallelForeachMalformedBody` |
+| §6.10 `parallel foreach` (ejecución, determinismo) | IDs `W-n` 1-based, `$item`/`$index`, reporte en orden de índice, no-lista Class A, lista vacía, semáforo, scope, error sin each = Class B, comando desconocido, walkRefs | `internal/scheduler/fanout_test.go`: `TestFanoutThreeSpawns`, `TestFanoutDeterministicReport`, `TestFanoutNonList`, `TestFanoutEmptyList`, `TestFanoutSemaphoreBound`, `TestFanoutItemScopeGone`, `TestFanoutErrorWithoutEach`, `TestFanoutUnknownCommand`, `TestFanoutWalkRefs` |
+| §8 conjunto completo de construcciones v0.3 | Todas las construcciones (incl. v0.3) parsean al AST esperado | `internal/ann/parser_test.go`: `TestParseGolden` (fixture `testdata/ann/all_constructs.ann` ↔ `.golden`) |

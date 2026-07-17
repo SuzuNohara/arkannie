@@ -6,10 +6,10 @@ minimalista), orquestando agentes que corren como procesos `claude` aislados.
 El binario es determinista: no hay LLM en el camino de compilación/despacho —
 Claude solo ejecuta los agentes.
 
-Versión: `0.2.0` · Lenguaje: Ann v0.2
+Versión: `0.3.0` · Lenguaje: Ann v0.3
 
 > La letra dura de la sintaxis y semántica vive en `spec/ann-lang.md` (spec
-> **normativa** de Ann v0.2). Este manual es **didáctico**: para cualquier duda
+> **normativa** de Ann v0.3). Este manual es **didáctico**: para cualquier duda
 > de comportamiento, la spec y sus tests deciden.
 
 > Referencia rápida en cualquier momento con `arkannie --help`. Este manual es
@@ -47,8 +47,8 @@ make dist         # produce dist/arkannie-<version>.tar.gz
 El tarball es un `ARKANNIE_HOME` autocontenido (binario + shim + `.agents/` +
 identidad + specs + este manual). En la máquina destino:
 ```bash
-tar -xzf arkannie-0.2.0.tar.gz
-ln -sf "$PWD/arkannie-0.2.0/bin/arkannie.sh" ~/.local/bin/arkannie
+tar -xzf arkannie-0.3.0.tar.gz
+ln -sf "$PWD/arkannie-0.3.0/bin/arkannie.sh" ~/.local/bin/arkannie
 arkannie --help
 ```
 
@@ -116,7 +116,7 @@ colisión, la anterior se archiva a `.output/<id>-N.md`.
 
 ---
 
-## 4. El lenguaje Ann (v0.2)
+## 4. El lenguaje Ann (v0.3)
 
 Ann es un lenguaje de **despacho**, no de propósito general. Tres niveles
 estructurales: **arkannie** (el runtime, Nivel 1), los **wave agents** (Nivel 2,
@@ -125,7 +125,7 @@ un proceso claude por dispatch que devuelve un envelope), y los **sub-agents**
 
 ### Estructura del programa
 ```
-# ann v0.2                 // header obligatorio, línea 1, columna 0
+# ann v0.3                 // header obligatorio, línea 1, columna 0
 // los comentarios son de línea con //
 ```
 
@@ -137,6 +137,34 @@ un proceso claude por dispatch que devuelve un envelope), y los **sub-agents**
 el dispatch; todo tras `: ` es contexto verbatim (puede abarcar varias líneas).
 Los `$refs` en args o contexto se sustituyen desde RAM.
 
+### Comillas y escapes
+Los literales de string van entre `"…"` y reconocen **tres** escapes; el resto es
+literal:
+```
+$q = "con \"comillas\" y \\backslash"   // -> con "comillas" y \backslash
+$p = "cuesta \$5 sin interpolar"        // -> cuesta $5   (el $ NO se resuelve)
+```
+`\"` y `\\` producen la comilla y la barra literales; `\$` produce un `$` literal
+y **desactiva** la interpolación de esa posición. Cualquier otro `\X` (p. ej.
+`\q`) es error de sintaxis. Los slots `{{ … }}` y las `$ref` reales dentro del
+string se transportan verbatim (las `$ref` sí se resuelven). Detalle normativo en
+`spec/ann-lang.md §1.4`.
+
+### Contexto multilínea
+El bloque de contexto tras `: ` puede abarcar varias líneas. Empieza en la primera
+línea indentada y **termina** en la primera línea que sea un dedent, un `}`, o que
+contenga `->`. Las líneas en blanco **internas** se conservan (separan párrafos) y
+la indentación adicional se preserva relativa:
+```
+[activity] act-004 :
+  intro paragraph
+
+  - item with detail
+      nested note
+```
+Ese contexto llega al agente con su línea en blanco y su sangría anidada intactas.
+(En v0.2 la primera línea en blanco cortaba el bloque; ya no.) Ver `§2.7`.
+
 ### Bindings (RAM) y `$result`
 ```
 $x = "una cadena literal"
@@ -145,11 +173,33 @@ $r = [seeker] : encuéntralo      // $r contiene el payload de éxito
 ```
 Cada bloque `{ }` es un scope: los bindings creados dentro desaparecen al cerrar.
 
+### Construir datos: `list`, `concat`, `map`
+Ann tiene tres constructores de valores compuestos que anidan libremente entre sí.
+Un **elemento** puede ser un literal, una `$ref` (con o sin punto) o un
+constructor anidado:
+```
+$items  = list("a", list("b"), $r.items)      // lista; anida listas
+$joined = concat($items, "x")                  // aplana UN nivel, en orden
+$cfg    = map(k: "v", n: $r.campo, sub: map(c: "d"))  // mapa clave->valor
+```
+- `list(...)` crea una lista ordenada e inmutable; una `list()` anidada queda
+  anidada.
+- `concat(...)` concatena: un argumento que es lista aporta sus elementos, uno que
+  no lo es entra suelto en su posición. **Aplana exactamente un nivel** (una lista
+  dentro de un argumento sigue anidada). `concat()` es lista vacía.
+- `map(k: v, ...)` crea un mapa; las claves son identificadores, los valores usan
+  la misma gramática de elemento. Una clave duplicada o mal formada es error de
+  sintaxis. Un `map`/`list` que emites con `[return]` sale como bloque YAML.
+
+**Cambio v0.3:** un `$ref` de elemento que no resuelve ya **no** produce un string
+vacío silencioso: emite un aviso Class A y ese elemento (o entrada de mapa) se
+**omite**; el programa continúa. `concat` y `map` solo son constructores antes de
+`(`; como palabra suelta o dentro de texto son literales. Ver `§2.6`.
+
 ### Acceso por punto (`$ref.seg.seg`)
-Un binding que contiene un mapa se lee campo por campo con puntos. En v0.2 una
-ruta con punto resuelve al **valor** de ese campo — **no** existe el atajo
-"sobre completo" de v0.1 (`$r.payload` como el payload entero era la forma vieja
-y ya no aplica):
+Un binding que contiene un mapa se lee campo por campo con puntos. Una ruta con
+punto resuelve al **valor** de ese campo — **no** existe un atajo "sobre
+completo" (`$r.payload` como el payload entero no aplica):
 ```
 [echo] : el estado es $r.status           // inlinea el valor string
 [writer] : la respuesta es $r.payload.out // camina payload, luego out
@@ -181,6 +231,30 @@ parallel {                               // despacho concurrente (cada uno --id 
 }
   each -> { [notify] : $result.payload.out }
 ```
+
+#### Fan-out dinámico — `parallel foreach`
+Cuando el número de despachos depende de una lista de runtime, `parallel foreach`
+lanza **una plantilla** de despacho concurrentemente, una vez por elemento:
+```
+parallel foreach $r.items --id=W {
+  [echo] : "$item @ $index"
+}
+  each -> {
+    [notify] : "$result"
+  }
+```
+- `--id=W` es la **base** obligatoria; el runtime sintetiza `W-1`, `W-2`, …
+  (1-based). La plantilla **no** lleva `--id` propio.
+- Dentro de la plantilla, `$item` es el elemento actual y `$index` su índice
+  1-based; solo viven durante el statement.
+- Exactamente **una** plantilla por bloque. El `each -> {}` es opcional.
+- Aunque corren en paralelo, **el reporte se ensambla en orden de índice** (es
+  determinista, no en orden de llegada).
+- Lista vacía → cero despachos; un binding que no es lista → aviso Class A y se
+  salta. Un error de ítem sin `each` escala (Class B) tras completar todos.
+
+Un `foreach` a solas sigue siendo secuencial; solo `parallel foreach` reparte.
+Detalle en `§6.10`.
 
 #### `if` / `else` — condicional determinista
 Una guarda elige una rama. Es **una sola** comparación, solo `==` o `!=`, entre
@@ -214,6 +288,29 @@ Si el éxito llega en la tercera vuelta, se hacen exactamente tres despachos. Si
 `until`, el loop corre las `N` vueltas completas. Un operando compuesto en la
 guarda se trata como no cumplido (Class A): el loop corre hasta `limit`.
 
+### Retry declarativo — `--retry` / `--backoff`
+Un solo despacho puede reintentarse por sí mismo con dos flags reservados, sin
+escribir un `loop`:
+```
+[seeker] fetch --id=q --retry=2 --backoff=1
+  error -> { [notify] : "agotado tras 3 intentos" }
+```
+- `--retry=N` autoriza hasta `1 + N` intentos. Solo reintenta un `error`
+  **recuperable** (`payload.recoverable: true`) o un **timeout**; un error no
+  recuperable no se reintenta.
+- `--backoff=S` espera de forma **lineal** antes de cada reintento: `S·1`, `S·2`,
+  … segundos. Con `--retry=2 --backoff=2` espera 2 s y luego 4 s.
+- Si se agotan los reintentos, el último error sigue siendo **capturable** por un
+  `error -> {}` (no es un fallo fatal por sí mismo).
+- Solo agentes `agnostic`: `--retry` sobre un `executor` es una parada Class B (no
+  se despacha), porque re-ejecutar un executor duplicaría sus efectos.
+
+**¿`--retry` o `loop ... until`?** Usa `--retry` para reintentar **el mismo
+despacho** ante un fallo transitorio (timeout, error recuperable), con backoff
+gratis. Usa `loop ... until` cuando necesitas **hacer polling** hasta una
+condición que tú evalúas (`$r.status == "success"`), reasignando el binding en
+cada vuelta, o cuando el cuerpo tiene más de un statement. Ver `§2.10` y `§6.7`.
+
 ### `[return]` — el indicador de salida
 El programa decide qué aparece en la salida; los payloads de éxito **no** se
 vuelcan automáticamente:
@@ -226,6 +323,26 @@ Un `[return]` toma un operando (un `$binding` o un literal). Con dos o más
 returns, cada uno requiere `--id` único; un return dentro de foreach/loop/each
 requiere `--id` y emite secciones numeradas (`--id-1`, `--id-2`, …). Un programa
 sin `[return]` produce un cuerpo vacío.
+
+### Composición con `call` — módulos como funciones
+`call` ejecuta otro `.ann` como una **función**: RAM aislada y valor de retorno
+explícito.
+```
+$sub = call "sub.ann"    // liga el valor de retorno del módulo
+call "sub.ann"           // ejecuta el módulo, sin ligar nada
+```
+- **RAM aislada:** el módulo no ve los bindings del padre ni los suyos vuelven al
+  padre. Es una función pura sobre el sistema de archivos.
+- **Valor de retorno:** si el módulo tiene un `[return]` único, `$sub` recibe ese
+  valor; si tiene varios `[return]` etiquetados, `$sub` recibe un mapa indexado por
+  su `--id`. Los `[return]` del hijo **no** aparecen en el reporte del padre.
+- **Profundidad 1:** un módulo invocado no puede a su vez hacer `call` (sin
+  recursión). No admite paso de argumentos en v0.3.
+- **Seguridad de ruta:** la ruta es relativa al directorio del programa y no puede
+  escapar de él; una ruta fuera, un módulo inexistente o una cabecera de versión
+  incorrecta detienen la corrida (Class B).
+- El frontmatter de la salida lista también los agentes usados por los módulos
+  invocados. Detalle en `§2.11`.
 
 ### Keywords nativos
 | Keyword | Efecto |
