@@ -13,7 +13,7 @@ type Program struct{ Statements []Stmt }
 type Stmt interface{ stmt() }
 
 // Expr is the sealed expression interface for binding right-hand sides,
-// implemented by *Dispatch, StrLit, ListLit, *Concat and MapLit.
+// implemented by *Dispatch, StrLit, ListLit, *Concat, MapLit and *Call.
 type Expr interface{ expr() }
 
 // Status identifies a trinary handler key (§2.2).
@@ -161,13 +161,22 @@ type MapEntry struct {
 	Val Elem
 }
 
+// Call runs another Ann module as a function (v0.4): `$x = call "module.ann"`
+// executes the module in RAM isolation and binds its value; a bare `call
+// "module.ann"` runs and discards it. Path is the verbatim module path relative
+// to the parent program's directory. It is both a statement and an expression.
+type Call struct {
+	Path string
+	Line int
+}
+
 // keywords are reserved per §1.3 and cannot be used as binding names.
 var keywords = map[string]bool{
 	"parallel": true, "foreach": true, "loop": true,
 	"success": true, "error": true, "info": true,
 	"each": true, "limit": true,
 	"ask-user": true, "notify": true, "clarify": true, "null": true,
-	"return": true,
+	"return": true, "call": true,
 }
 
 // addFlag records a lexed flag ("name" or "name=value"); --id mirrors to ID.
@@ -189,9 +198,11 @@ func (*ParallelForeach) stmt() {}
 func (*Foreach) stmt()         {}
 func (*Loop) stmt()            {}
 func (*If) stmt()              {}
+func (*Call) stmt()            {}
 
 func (*Dispatch) expr() {}
 func (StrLit) expr()    {}
 func (ListLit) expr()   {}
 func (*Concat) expr()   {}
 func (MapLit) expr()    {}
+func (*Call) expr()     {}

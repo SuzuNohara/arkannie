@@ -97,7 +97,7 @@ func (a *App) runProgram(reg *registry.Registry, args parsedArgs, runID string) 
 		fixed = fixedSrc
 	}
 	res := a.runScheduler(reg, prog, runID, args.input, consentFrom(args))
-	res.Agent = programAgents(prog)
+	res.Agent = programAgents(prog, filepath.Dir(args.input))
 	// R14: when --interpret repaired the program, include the corrected source
 	// verbatim in the output body. The normal (no-repair) path is untouched.
 	if fixed != nil {
@@ -107,11 +107,12 @@ func (a *App) runProgram(reg *registry.Registry, args parsedArgs, runID string) 
 }
 
 // programAgents returns the distinct, sorted agent commands dispatched by the
-// program (excluding native keywords), joined by ", " for the frontmatter.
-// Empty program (or only keywords) yields "(program)".
-func programAgents(prog *ann.Program) string {
+// program (excluding native keywords), joined by ", " for the frontmatter. It
+// folds in agents dispatched by called modules (parse at depth 1), resolved
+// relative to programDir. Empty program (or only keywords) yields "(program)".
+func programAgents(prog *ann.Program, programDir string) string {
 	seen := map[string]bool{}
-	collectAgents(prog.Statements, seen)
+	collectAgents(prog.Statements, programDir, seen, true)
 	if len(seen) == 0 {
 		return "(program)"
 	}
@@ -125,39 +126,74 @@ func programAgents(prog *ann.Program) string {
 
 // collectAgents walks statements (including nested handlers and blocks),
 // recording every dispatch command that is a real agent, not a native keyword.
-func collectAgents(stmts []ann.Stmt, seen map[string]bool) {
+// A `call` folds in the called module's agents only when follow is true —
+// programAgents passes true (depth 1) and addCallAgents passes false, so a
+// module reached through a call never folds its own calls (depth stays 1).
+func collectAgents(stmts []ann.Stmt, programDir string, seen map[string]bool, follow bool) {
 	for _, st := range stmts {
 		switch v := st.(type) {
 		case *ann.Dispatch:
-			addAgent(v, seen)
+			addAgent(v, programDir, seen, follow)
 		case *ann.Assign:
-			if d, ok := v.Expr.(*ann.Dispatch); ok {
-				addAgent(d, seen)
+			switch e := v.Expr.(type) {
+			case *ann.Dispatch:
+				addAgent(e, programDir, seen, follow)
+			case *ann.Call:
+				if follow {
+					addCallAgents(e, programDir, seen)
+				}
 			}
 		case *ann.Parallel:
 			for i := range v.Dispatches {
-				addAgent(&v.Dispatches[i], seen)
+				addAgent(&v.Dispatches[i], programDir, seen, follow)
 			}
-			collectAgents(v.Each, seen)
+			collectAgents(v.Each, programDir, seen, follow)
+		case *ann.ParallelForeach:
+			addAgent(&v.Template, programDir, seen, follow)
+			collectAgents(v.Each, programDir, seen, follow)
+		case *ann.If:
+			collectAgents(v.Then, programDir, seen, follow)
+			collectAgents(v.Else, programDir, seen, follow)
 		case *ann.Foreach:
-			collectAgents(v.Body, seen)
+			collectAgents(v.Body, programDir, seen, follow)
 		case *ann.Loop:
-			collectAgents(v.Body, seen)
+			collectAgents(v.Body, programDir, seen, follow)
+		case *ann.Call:
+			if follow {
+				addCallAgents(v, programDir, seen)
+			}
 		}
 	}
 }
 
 // addAgent records a dispatch's command and recurses into its handlers,
 // skipping native keywords (ask-user, notify, clarify, return).
-func addAgent(d *ann.Dispatch, seen map[string]bool) {
+func addAgent(d *ann.Dispatch, programDir string, seen map[string]bool, follow bool) {
 	switch d.Command {
 	case "ask-user", "notify", "clarify", "return":
 	default:
 		seen[d.Command] = true
 	}
 	for _, body := range d.Handlers {
-		collectAgents(body, seen)
+		collectAgents(body, programDir, seen, follow)
 	}
+}
+
+// addCallAgents parses a called module (best-effort, depth 1) and folds its
+// dispatched agents into the frontmatter set. A module that cannot be read or
+// parsed contributes nothing — the frontmatter never fails the run. Nested
+// calls are not followed: collectAgents ignores *Call bodies for a module it
+// reached through another call, keeping the fold at depth 1.
+func addCallAgents(c *ann.Call, programDir string, seen map[string]bool) {
+	src, err := os.ReadFile(filepath.Clean(filepath.Join(programDir, c.Path)))
+	if err != nil {
+		return
+	}
+	prog, perr := ann.Parse(src, ann.ProgramMode)
+	if perr != nil {
+		return
+	}
+	collectAgents(prog.Statements, programDir, seen, false)
 }
 
 // withCorrectedProgram prepends a clearly labeled block containing the

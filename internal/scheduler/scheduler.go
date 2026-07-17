@@ -2,6 +2,8 @@ package scheduler
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -58,6 +60,17 @@ type execState struct {
 	seq          int
 	loopDepth    int            // >0 while inside a foreach/loop/each body
 	returnCounts map[string]int // per-[return] --id run counter for loop numbering
+	callDepth    int            // nesting level of `call` (0 = top-level program)
+	callSeq      int            // 1-based counter of calls executed (run-dir namespacing)
+	returns      []capturedReturn
+}
+
+// capturedReturn records a [return]'s raw value and its --id, so a called module
+// can reduce its returns to the value the call expression yields without going
+// through the markdown report.
+type capturedReturn struct {
+	id  string
+	val ram.Value
 }
 
 // preparedDispatch is a dispatch resolved up to (but not including) the spawn.
@@ -168,6 +181,9 @@ func (s *Scheduler) execStmt(st *execState, stmt ann.Stmt) *Escalation {
 		return s.execLoop(st, v)
 	case *ann.If:
 		return s.execIf(st, v)
+	case *ann.Call:
+		_, esc := s.execCall(st, v)
+		return esc
 	default:
 		return nil
 	}
@@ -240,6 +256,7 @@ func (s *Scheduler) execReturn(st *execState, d *ann.Dispatch) {
 	} else {
 		val = ram.Value{Kind: ram.KString, Str: ram.Unescape(op)}
 	}
+	st.returns = append(st.returns, capturedReturn{id: d.ID, val: val})
 	label := d.ID
 	if st.loopDepth > 0 {
 		st.returnCounts[d.ID]++
@@ -345,6 +362,13 @@ func (s *Scheduler) execAssign(st *execState, as *ann.Assign) *Escalation {
 		return nil
 	case *ann.Dispatch:
 		return s.assignDispatch(st, as.Name, e)
+	case *ann.Call:
+		val, esc := s.execCall(st, e)
+		if esc != nil {
+			return esc
+		}
+		_ = st.ram.Set(as.Name, val) // name validated at parse
+		return nil
 	default:
 		return nil
 	}
@@ -594,6 +618,139 @@ func resolveOperand(r *ram.RAM, op ann.Operand) guardVal {
 		return guardVal{compound: "list"}
 	default:
 		return guardVal{str: v.Str}
+	}
+}
+
+// maxCallDepth is the `call` nesting limit (v0.4): a called module may not
+// itself call another module.
+const maxCallDepth = 1
+
+// execCall runs `call "module.ann"` with FUNCTION semantics: the module executes
+// in total RAM isolation, with no checkpointing (the call is an atomic statement
+// of the parent — on child failure the parent escalates and a resume re-executes
+// the whole call), and its [return]s reduce to the value the call yields. It
+// returns that value (KString for one return, KMap keyed by --id for several) or
+// a Class B escalation. The child's [return]s never touch the parent report.
+func (s *Scheduler) execCall(st *execState, c *ann.Call) (ram.Value, *Escalation) {
+	if st.callDepth >= maxCallDepth {
+		return ram.Value{}, escCallDepth(c)
+	}
+	path, esc := resolveCallPath(st.programPath, c)
+	if esc != nil {
+		return ram.Value{}, esc
+	}
+	prog, esc := loadCallProgram(c, path)
+	if esc != nil {
+		return ram.Value{}, esc
+	}
+	st.callSeq++
+	return s.runChild(st, prog)
+}
+
+// resolveCallPath resolves c.Path relative to the parent program's directory and
+// enforces (Clean + prefix check, .langs §5) that it stays inside that tree. A
+// path escaping the program directory is a Class B stop.
+func resolveCallPath(programPath string, c *ann.Call) (string, *Escalation) {
+	dir := filepath.Dir(programPath)
+	target := filepath.Clean(filepath.Join(dir, c.Path))
+	absDir, err1 := filepath.Abs(dir)
+	absTarget, err2 := filepath.Abs(target)
+	if err1 != nil || err2 != nil {
+		return "", escCallPath(c)
+	}
+	if absTarget != absDir && !strings.HasPrefix(absTarget, absDir+string(os.PathSeparator)) {
+		return "", escCallPath(c)
+	}
+	return target, nil
+}
+
+// loadCallProgram reads and parses a called module in program mode. A read
+// failure or a parse error (including a wrong version header) is a Class B stop
+// carrying the call site's line.
+func loadCallProgram(c *ann.Call, path string) (*ann.Program, *Escalation) {
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return nil, escCallLoad(c, fmt.Sprintf("module %q could not be read: %v", c.Path, err))
+	}
+	prog, perr := ann.Parse(src, ann.ProgramMode)
+	if perr != nil {
+		return nil, escCallLoad(c, fmt.Sprintf("module %q parse error at %d:%d [%s]: %s",
+			c.Path, perr.Line, perr.Col, perr.Category, perr.Msg))
+	}
+	return prog, nil
+}
+
+// runChild executes a module in a fresh execState — isolated RAM, checkpointing
+// off (programPath ""), depth+1, run dirs namespaced under <runID>/call-<n> —
+// while sharing the parent's Spawner/config/registry. It returns the reduced
+// call value or the child's escalation, which propagates to the parent.
+func (s *Scheduler) runChild(st *execState, prog *ann.Program) (ram.Value, *Escalation) {
+	child := &execState{
+		ram:          ram.New(),
+		runID:        fmt.Sprintf("%s/call-%d", st.runID, st.callSeq),
+		programPath:  "",
+		status:       envelope.StatusSuccess,
+		returnCounts: map[string]int{},
+		callDepth:    st.callDepth + 1,
+	}
+	if esc := s.runStatements(child, prog.Statements, 0, false); esc != nil {
+		return ram.Value{}, esc
+	}
+	return s.callReturnValue(child), nil
+}
+
+// callReturnValue reduces a module's captured [return]s to the call value: one
+// return → its value; two or more → a KMap keyed by --id; none → the empty
+// string (with a Class A notice).
+func (s *Scheduler) callReturnValue(child *execState) ram.Value {
+	switch len(child.returns) {
+	case 0:
+		s.Notices = append(s.Notices, "[class A] call: module produced no [return] — bound the empty string")
+		return ram.Value{Kind: ram.KString}
+	case 1:
+		return child.returns[0].val
+	default:
+		out := make(map[string]ram.Value, len(child.returns))
+		for _, r := range child.returns {
+			out[r.id] = r.val
+		}
+		return ram.Value{Kind: ram.KMap, Map: out}
+	}
+}
+
+// escCallDepth reports a `call` nested past the depth-1 limit as Class B.
+func escCallDepth(c *ann.Call) *Escalation {
+	return &Escalation{
+		Class: 'B',
+		Title: "call depth exceeded",
+		Detail: fmt.Sprintf("call %q at line %d exceeds the maximum nesting depth of %d: "+
+			"a called module may not itself call another.", c.Path, c.Line, maxCallDepth),
+		Command:  "[call]",
+		Proposal: "Flatten the module graph so no called module contains its own call.",
+	}
+}
+
+// escCallPath reports a module path escaping the program tree as Class B.
+func escCallPath(c *ann.Call) *Escalation {
+	return &Escalation{
+		Class: 'B',
+		Title: "call path escapes the program tree",
+		Detail: fmt.Sprintf("call %q at line %d resolves outside the program directory; "+
+			"a module path must stay within the program tree.", c.Path, c.Line),
+		Command:  "[call]",
+		Proposal: "Use a module path inside the program's directory tree.",
+	}
+}
+
+// escCallLoad reports a module read/parse failure as Class B, carrying the call
+// site's line in the detail.
+func escCallLoad(c *ann.Call, detail string) *Escalation {
+	return &Escalation{
+		Class:    'B',
+		Title:    "call module load failed",
+		Detail:   fmt.Sprintf("%s (call at line %d)", detail, c.Line),
+		Command:  "[call]",
+		Proposal: "Fix the module path or its contents and re-run the program.",
 	}
 }
 

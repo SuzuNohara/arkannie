@@ -52,6 +52,9 @@ func dumpStmt(b *strings.Builder, s Stmt, depth int) {
 		dumpStmts(b, st.Body, depth+1)
 	case *If:
 		dumpIf(b, st, depth)
+	case *Call:
+		writeIndent(b, depth)
+		fmt.Fprintf(b, "Call line=%d path=%q\n", st.Line, st.Path)
 	}
 }
 
@@ -156,5 +159,8 @@ func dumpExpr(b *strings.Builder, e Expr, depth int) {
 			parts[i] = ent.Key + ": " + elemSrc(ent.Val)
 		}
 		fmt.Fprintf(b, "MapLit %q\n", parts)
+	case *Call:
+		writeIndent(b, depth)
+		fmt.Fprintf(b, "Call path=%q\n", ex.Path)
 	}
 }

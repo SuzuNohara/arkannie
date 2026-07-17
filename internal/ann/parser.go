@@ -278,6 +278,8 @@ func (p *parser) parseKeywordStmt(toks []token) (Stmt, *ParseError) {
 		return p.parseForeach(toks)
 	case "loop":
 		return p.parseLoop(toks)
+	case "call":
+		return parseCall(toks)
 	case "if":
 		return p.parseIf(toks)
 	case "while":
@@ -422,9 +424,29 @@ func (p *parser) parseExpr(toks []token) (Expr, *ParseError) {
 		return parseConcat(toks)
 	case tkMapOpen:
 		return parseMap(toks)
+	case tkIdent:
+		if toks[0].text == "call" {
+			return parseCall(toks)
+		}
+		return nil, errAt(toks[0], Syntax, "expected [command], string literal, list(), concat() or map() after '='")
 	default:
 		return nil, errAt(toks[0], Syntax, "expected [command], string literal, list(), concat() or map() after '='")
 	}
+}
+
+// parseCall parses `call "module.ann"` in statement or expression position.
+// Exactly one string-literal path must follow the keyword; a missing or
+// non-string path, or trailing tokens, is a Syntax error at the offending
+// token's line:column.
+func parseCall(toks []token) (*Call, *ParseError) {
+	kw := toks[0]
+	if len(toks) < 2 || toks[1].kind != tkString {
+		return nil, errAt(kw, Syntax, "call must be followed by a string-literal module path")
+	}
+	if len(toks) > 2 {
+		return nil, errAt(toks[2], Syntax, "unexpected tokens after call path")
+	}
+	return &Call{Path: toks[1].text, Line: kw.line}, nil
 }
 
 // parseList parses a top-level list(...) expression and rejects trailing

@@ -304,6 +304,10 @@ func walkRefs(stmt ann.Stmt, fn func(string)) {
 		operandRef(v.Right, fn)
 		walkAll(v.Then, fn)
 		walkAll(v.Else, fn)
+	case *ann.Call:
+		// A `call` takes no arguments (v0.4) and runs in RAM isolation, so it
+		// reads no parent binding; the value it produces is tracked through the
+		// enclosing Assign, not here.
 	}
 }
 
