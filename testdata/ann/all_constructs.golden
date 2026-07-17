@@ -46,3 +46,23 @@ Program
       Dispatch line=62 cmd=notify args=["failure"] id="" ctx="" flags={}
   Loop line=65 limit=5 until op=== left=$r.status right="success"
     Dispatch line=66 cmd=seeker args=["poll"] id="" ctx="" flags={}
+  Assign line=70 name=quoted
+    StrLit "con \"comilla\" y \\backslash"
+  Assign line=71 name=price
+    StrLit "literal \\$5 sin interpolar"
+  Dispatch line=72 cmd=echo args=["\\$literal"] id="" ctx="precio \\$5 sin interpolar" flags={}
+  Dispatch line=74 cmd=activity args=["act-004"] id="" ctx="intro paragraph\n\n- item with detail\n    nested note" flags={}
+  Assign line=80 name=nested
+    ListLit ["a" "list(b)" "$r.items"]
+  Assign line=81 name=joined
+    Concat ["$items" "x"]
+  Assign line=82 name=cfg
+    MapLit ["k: v" "n: $r.campo" "anidado: map(c: d)" "lista: list(x)"]
+  ParallelForeach line=84 list=$r.items base=W
+    Dispatch line=85 cmd=echo args=[] id="" ctx="\"$item @ $index\"" flags={}
+    Each
+      Dispatch line=88 cmd=notify args=[] id="" ctx="\"$result\"" flags={}
+  Dispatch line=91 cmd=seeker args=["retryable"] id="" ctx="" flags={backoff="1" retry="2"}
+  Assign line=93 name=sub
+    Call path="sub.ann"
+  Call line=94 path="sub.ann"

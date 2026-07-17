@@ -65,3 +65,30 @@ if $r.error != null {
 loop limit=5 until $r.status == "success" {
   [seeker] poll
 }
+
+// --- v0.3 additions §8 ---
+$quoted = "con \"comilla\" y \\backslash"
+$price = "literal \$5 sin interpolar"
+[echo] "\$literal" : precio \$5 sin interpolar
+
+[activity] act-004 :
+  intro paragraph
+
+  - item with detail
+      nested note
+
+$nested = list("a", list("b"), $r.items)
+$joined = concat($items, "x")
+$cfg = map(k: "v", n: $r.campo, anidado: map(c: "d"), lista: list("x"))
+
+parallel foreach $r.items --id=W {
+  [echo] : "$item @ $index"
+}
+  each -> {
+    [notify] : "$result"
+  }
+
+[seeker] retryable --retry=2 --backoff=1
+
+$sub = call "sub.ann"
+call "sub.ann"

@@ -159,6 +159,13 @@ func dumpExpr(b *strings.Builder, e Expr, depth int) {
 			parts[i] = ent.Key + ": " + elemSrc(ent.Val)
 		}
 		fmt.Fprintf(b, "MapLit %q\n", parts)
+	case *Concat:
+		writeIndent(b, depth)
+		parts := make([]string, len(ex.Args))
+		for i, el := range ex.Args {
+			parts[i] = elemSrc(el)
+		}
+		fmt.Fprintf(b, "Concat %q\n", parts)
 	case *Call:
 		writeIndent(b, depth)
 		fmt.Fprintf(b, "Call path=%q\n", ex.Path)
