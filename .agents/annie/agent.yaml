@@ -1,0 +1,42 @@
+# [annie] — layer agent: Annie v1 (agents/annie) invoked as an arkannie wave.
+# Written for Covenant on 2026-09-12 (design P-6). The runtime spawns claude with cwd = layer.origin,
+# so Annie loads her own CLAUDE.md and executes the command in context.text with her full registry.
+# Dispatch requires --allow-layer=annie. It points at agents/annie, never at Covenant (no recursion).
+command: "[annie]"
+model: opus
+scope: executor
+timeout: 900
+default_operation: run
+
+layer:
+  origin: /home/suzu/Documents/agents/annie
+
+capabilities:
+  purpose: Run any Annie v1 command ([planning], [implement], [testing], [audit], [investigation], …) inside Annie's own directory and return the outcome as an envelope.
+  use_when: A Covenant program needs Annie's software-development functions as a step — the second guarantee that no Annie capability is lost. Prefer [nova] for code-only scan/review/build when Annie's activity state is not needed.
+  inputs: context.text carries the Annie command line and its briefing, exactly as the developer would type it.
+  produces: outcome (one line), report (markdown), files_touched (list of paths relative to Annie's root).
+  examples:
+    - '[annie] --id=ctx : [context]'
+    - '[annie] --id=inv : [investigation] onyx-relay: how does the relay batch messages under load --reverse --auto'
+
+operations:
+  run:
+    id: run-op
+    description: Execute the Annie command in context.text within Annie's directory and report what happened. Never invents a command; an unknown command is an error.
+    context:
+      text:
+        type: string
+        required: true
+    grants: [read, write, execute]
+    output_schema:
+      success:
+        outcome: string
+        report: string
+        files_touched: list
+      error:
+        reason: string
+        recoverable: boolean
+      info:
+        message: string
+        missing_field: string

@@ -1,0 +1,35 @@
+# [covenant-brief] — agnostic renderer of an assignment brief (Covenant, 2026-09-12).
+# Turns one activity (YAML in context.text) plus the assignee's id and name into the brief the leader
+# hands to a minion (.covenant/sys-boards.md §6). Writes nothing; Covenant writes the file.
+command: "[covenant-brief]"
+model: haiku
+scope: agnostic
+timeout: 60
+default_operation: render
+
+capabilities:
+  purpose: "Render the Markdown brief for one delegated activity, with only the assignee's id and name as personal data."
+  use_when: "[assign] needs the brief rendered from the activity entry; the rendering must contain no other person's name, no metric, and no quarantined text."
+  inputs: "context.text = the activity's YAML block followed by a line `assignee_name: <name>` and, optionally, `guru_primer: gurus/<id>/primer.md`."
+  produces: "brief (markdown, the exact template of sys-boards.md §6)."
+  examples:
+    - '[covenant-brief] --id=b1 : <activity yaml>\nassignee_name: Ana R.'
+
+operations:
+  render:
+    id: render-op
+    description: "Render the brief from the activity in context.text following the fixed template; refuse if the activity has no assignee or if context.text carries profile data beyond id and name."
+    context:
+      text:
+        type: string
+        required: true
+    grants: [read]
+    output_schema:
+      success:
+        brief: string
+      error:
+        reason: string
+        recoverable: boolean
+      info:
+        message: string
+        missing_field: string

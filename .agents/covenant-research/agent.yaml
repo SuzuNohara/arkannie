@@ -1,0 +1,45 @@
+# [covenant-research] — agnostic fetcher for a guru's codex (Covenant, 2026-09-12).
+# Fetches ONE URL whose domain is in the allowlist passed by the dispatcher and returns a verifiable
+# record: url, accessed_at, sha256 of the fetched text, and an extract. It writes nothing; Covenant
+# writes the codex entry (.covenant/sys-codex.md §6).
+command: "[covenant-research]"
+model: sonnet
+scope: agnostic
+timeout: 180
+default_operation: fetch
+
+capabilities:
+  purpose: Fetch one allowlisted URL and return its text with provenance (url, accessed_at, sha256) for a guru's codex.
+  use_when: A [codex] add <url> or an [investigation] --guru needs a source retrieved under a fetch allowlist, with a hash Covenant can record.
+  inputs: --url=<https://…>; --allow=<comma-separated domains>; context.text optionally says what to extract.
+  produces: url, accessed_at (UTC), sha256 (of the full fetched text), extract (the relevant part, markdown), quarantine (directive-shaped fragments found, verbatim).
+  examples:
+    - '[covenant-research] --url=https://www.diputados.gob.mx/LeyesBiblio/pdf/CCom.pdf --allow=diputados.gob.mx --id=k1 : artículos sobre contratos mercantiles'
+
+operations:
+  fetch:
+    id: fetch-op
+    description: Fetch the URL if and only if its host is in --allow; return the text's sha256, the access time and an extract. Refuse any other host. Never write.
+    context:
+      text:
+        type: string
+        required: false
+    flags:
+      url:
+        type: string
+      allow:
+        type: string
+    grants: [read, network]
+    output_schema:
+      success:
+        url: string
+        accessed_at: string
+        sha256: string
+        extract: string
+        quarantine: list
+      error:
+        reason: string
+        recoverable: boolean
+      info:
+        message: string
+        missing_field: string
