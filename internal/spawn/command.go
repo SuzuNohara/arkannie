@@ -117,6 +117,32 @@ func PlusSideEffects(disallowed []string) []string {
 	return out
 }
 
+// sterilityBelt is the scope-independent containment belt (RT-01, ADR-015):
+// the tools through which a wave agent could create a level 3 (sub-agents,
+// workflows) or reach beyond its dispatch (scheduling, remote triggers,
+// messaging, worktrees). SPK-spawn-sterility (2026-10-18) measured that an
+// executor with --allowedTools Read could still invoke Agent and that the
+// sub-agent ran Bash; an explicit --disallowedTools is the only lock that
+// held. Applied last, to every scope, on top of the scope belt.
+var sterilityBelt = []string{
+	"Agent", "Task", "Workflow", "CronCreate", "CronDelete", "ScheduleWakeup",
+	"RemoteTrigger", "SendMessage", "PushNotification", "EnterWorktree",
+}
+
+// withSterilityBelt appends the sterility belt to disallowed, deduplicated,
+// keeping the caller's order first. Idempotent.
+func withSterilityBelt(disallowed []string) []string {
+	seen := make(map[string]bool, len(disallowed)+len(sterilityBelt))
+	out := make([]string, 0, len(disallowed)+len(sterilityBelt))
+	for _, t := range append(append([]string(nil), disallowed...), sterilityBelt...) {
+		if !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 // BuildRunSpec derives the spawn contract for one operation dispatch.
 // It never touches the filesystem and never spawns anything. Timeout is
 // resolved first so a §4.2 usage error (negative flag) takes precedence over
@@ -140,6 +166,10 @@ func BuildRunSpec(a *registry.Agent, op *registry.Operation, promptFile, runDir,
 	} else {
 		spec.DisallowedTools = append([]string(nil), agnosticDisallowed...)
 	}
+	// Sterility (RT-01): no wave agent may delegate or reach beyond its
+	// dispatch, whatever its scope. Applied after the scope belt so the belt
+	// is present on every path below (layer, executor, agnostic).
+	spec.DisallowedTools = withSterilityBelt(spec.DisallowedTools)
 	// Layer spawn (decisions 5/6): cwd = the absorbed AI's origin, gated by a
 	// dedicated layer consent that is strictly stronger than --allow-workspace
 	// (so it is not additionally required). The belt is already set by scope,

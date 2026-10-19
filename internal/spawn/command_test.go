@@ -83,7 +83,7 @@ func TestBuildRunSpec(t *testing.T) {
 		if !reflect.DeepEqual(spec.AllowedTools, wantAllowed) {
 			t.Errorf("AllowedTools = %v, want %v", spec.AllowedTools, wantAllowed)
 		}
-		wantDisallowed := []string{"Write", "Edit", "Bash", "NotebookEdit"}
+		wantDisallowed := withSterilityBelt([]string{"Write", "Edit", "Bash", "NotebookEdit"})
 		if !reflect.DeepEqual(spec.DisallowedTools, wantDisallowed) {
 			t.Errorf("DisallowedTools = %v, want %v", spec.DisallowedTools, wantDisallowed)
 		}
@@ -126,7 +126,7 @@ func TestBuildRunSpec(t *testing.T) {
 		if !reflect.DeepEqual(spec.AllowedTools, wantAllowed) {
 			t.Errorf("AllowedTools = %v, want %v", spec.AllowedTools, wantAllowed)
 		}
-		wantDisallowed := []string{"WebFetch", "WebSearch"}
+		wantDisallowed := withSterilityBelt([]string{"WebFetch", "WebSearch"})
 		if !reflect.DeepEqual(spec.DisallowedTools, wantDisallowed) {
 			t.Errorf("DisallowedTools = %v, want complement %v", spec.DisallowedTools, wantDisallowed)
 		}
@@ -273,7 +273,7 @@ func TestBuildRunSpecLayer(t *testing.T) {
 		if err != nil {
 			t.Fatalf("BuildRunSpec: unexpected error %v", err)
 		}
-		wantDisallowed := []string{"Write", "Edit", "Bash", "NotebookEdit"}
+		wantDisallowed := withSterilityBelt([]string{"Write", "Edit", "Bash", "NotebookEdit"})
 		if !reflect.DeepEqual(spec.DisallowedTools, wantDisallowed) {
 			t.Errorf("DisallowedTools = %v, want agnostic belt %v", spec.DisallowedTools, wantDisallowed)
 		}
@@ -290,7 +290,7 @@ func TestBuildRunSpecLayer(t *testing.T) {
 		if spec.Cwd != origin {
 			t.Errorf("Cwd = %q, want origin %q", spec.Cwd, origin)
 		}
-		wantDisallowed := []string{"WebFetch", "WebSearch"}
+		wantDisallowed := withSterilityBelt([]string{"WebFetch", "WebSearch"})
 		if !reflect.DeepEqual(spec.DisallowedTools, wantDisallowed) {
 			t.Errorf("DisallowedTools = %v, want grant complement %v", spec.DisallowedTools, wantDisallowed)
 		}
